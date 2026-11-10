@@ -153,6 +153,9 @@ export default function App() {
   } | null>(null);
 
   const [notice, setNotice] = useState('');
+  const [authStatus, setAuthStatus] = useState<
+    'checking' | 'signed-in' | 'error' | 'not-in-telegram'
+  >('checking');
   const [joined, setJoined] = useState<number[]>([]);
   const [clubJoined, setClubJoined] = useState<number[]>([]);
   const [query, setQuery] = useState('');
@@ -175,18 +178,23 @@ export default function App() {
     const initData = window.Telegram?.WebApp?.initData;
 
     if (!initData) {
+      setAuthStatus('not-in-telegram');
       setNotice('Открой GO через Telegram');
       return;
     }
 
     authenticateTelegram(initData)
       .then(() => {
-        if (!cancelled) console.log('GO: Telegram auth OK');
+        if (!cancelled) {
+          setAuthStatus('signed-in');
+          setNotice('Вход через Telegram выполнен успешно');
+        }
       })
       .catch((error) => {
         console.error('Telegram auth error:', error);
         if (!cancelled) {
-          setNotice('Не удалось войти через Telegram. Попробуй открыть GO заново.');
+          setAuthStatus('error');
+          setNotice('Ошибка авторизации Telegram. Попробуй открыть GO заново.');
         }
       });
 
@@ -718,8 +726,18 @@ export default function App() {
             </div>
 
             <div className="profile-status">
+              <span className={authStatus === 'signed-in' ? 'status-on' : 'status-off'} />
+              Telegram: {
+                authStatus === 'checking' ? 'проверяем вход...' :
+                authStatus === 'signed-in' ? 'авторизован ✓' :
+                authStatus === 'not-in-telegram' ? 'открой через Telegram' :
+                'ошибка входа'
+              }
+            </div>
+
+            <div className="profile-status">
               <span className={firebaseConfigured ? 'status-on' : 'status-off'} />
-              Firebase Auth: {firebaseConfigured ? 'настроен' : 'ожидает подключения'}
+              Firebase: {firebaseConfigured ? 'подключён' : 'не настроен'}
             </div>
           </section>
         )}
