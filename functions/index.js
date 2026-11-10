@@ -51,8 +51,8 @@ exports.telegramAuth = onRequest(
         .join("\n");
 
       const secretKey = crypto
-        .createHmac("sha256", "WebAppData")
-        .update(botToken.value())
+        .createHmac("sha256", botToken.value())
+        .update("WebAppData")
         .digest();
 
       const calculatedHash = crypto
