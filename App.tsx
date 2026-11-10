@@ -156,6 +156,7 @@ export default function App() {
   const [authStatus, setAuthStatus] = useState<
     'checking' | 'signed-in' | 'error' | 'not-in-telegram'
   >('checking');
+
   const [joined, setJoined] = useState<number[]>([]);
   const [clubJoined, setClubJoined] = useState<number[]>([]);
   const [query, setQuery] = useState('');
@@ -163,7 +164,7 @@ export default function App() {
   const startX = useRef(0);
   const currentPerson = people[personIndex % people.length];
 
-  // Telegram Mini App initialization
+  // Инициализация Telegram
   useEffect(() => {
     const tg = window.Telegram?.WebApp;
 
@@ -173,13 +174,22 @@ export default function App() {
     tg.expand();
   }, []);
 
+  // Авторизация Telegram + подробная диагностика
   useEffect(() => {
     let cancelled = false;
-    const initData = window.Telegram?.WebApp?.initData;
 
-    if (!initData) {
+    const tg = window.Telegram?.WebApp;
+    const initData = tg?.initData;
+
+    if (!tg || !initData) {
       setAuthStatus('not-in-telegram');
       setNotice('Открой GO через Telegram');
+      return;
+    }
+
+    if (!firebaseConfigured) {
+      setAuthStatus('error');
+      setNotice('Firebase не настроен. Проверь GitHub Secrets.');
       return;
     }
 
@@ -190,11 +200,17 @@ export default function App() {
           setNotice('Вход через Telegram выполнен успешно');
         }
       })
-      .catch((error) => {
+      .catch((error: unknown) => {
+        const message =
+          error instanceof Error
+            ? error.message
+            : String(error);
+
         console.error('Telegram auth error:', error);
+
         if (!cancelled) {
           setAuthStatus('error');
-          setNotice('Ошибка авторизации Telegram. Попробуй открыть GO заново.');
+          setNotice(`Ошибка входа: ${message}`);
         }
       });
 
@@ -203,8 +219,7 @@ export default function App() {
     };
   }, []);
 
-
-  // Telegram Back Button
+  // Кнопка «Назад» Telegram
   useEffect(() => {
     const tg = window.Telegram?.WebApp;
 
@@ -294,7 +309,6 @@ export default function App() {
 
   return (
     <div className="app-shell">
-
       <header className="topbar">
         <button
           className="brand"
@@ -326,10 +340,8 @@ export default function App() {
       )}
 
       <main className="main-content">
-
         {tab === 'home' && (
           <section className="screen screen-home">
-
             <section className="hero">
               <div className="hero-copy">
                 <div className="eyebrow">
