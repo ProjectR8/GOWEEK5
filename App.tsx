@@ -7,8 +7,10 @@ import {
   X, Clock3, SlidersHorizontal
 } from 'lucide-react';
 import { firebaseConfigured } from './firebase';
+import { authenticateTelegram } from './telegramAuth';
 
 type TelegramWebApp = {
+  initData: string;
   ready: () => void;
   expand: () => void;
   BackButton: {
@@ -167,6 +169,32 @@ export default function App() {
     tg.ready();
     tg.expand();
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const initData = window.Telegram?.WebApp?.initData;
+
+    if (!initData) {
+      setNotice('Открой GO через Telegram');
+      return;
+    }
+
+    authenticateTelegram(initData)
+      .then(() => {
+        if (!cancelled) console.log('GO: Telegram auth OK');
+      })
+      .catch((error) => {
+        console.error('Telegram auth error:', error);
+        if (!cancelled) {
+          setNotice('Не удалось войти через Telegram. Попробуй открыть GO заново.');
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
 
   // Telegram Back Button
   useEffect(() => {
