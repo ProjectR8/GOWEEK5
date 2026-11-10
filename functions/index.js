@@ -43,7 +43,6 @@ exports.telegramAuth = onRequest(
       }
 
       params.delete("hash");
-      params.delete("signature");
 
       const dataCheckString = [...params.entries()]
         .sort(([a], [b]) => a.localeCompare(b))
