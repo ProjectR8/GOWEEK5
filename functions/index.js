@@ -48,7 +48,21 @@ exports.telegramAuth = onRequest(
 
       const now = Math.floor(Date.now() / 1000);
       if (!Number.isFinite(authDate) || authDate > now + 60 || now - authDate > 86400) {
-        return res.status(401).json({ error: "Expired Telegram data" });
+        const tryHash = (token, str) =>
+  crypto.createHmac("sha256",
+    crypto.createHmac("sha256", "WebAppData").update(token).digest()
+  ).update(str).digest("hex") === hash.toLowerCase();
+
+const noSig = [...params.entries()]
+  .filter(([k]) => k !== "signature")
+  .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+  .map(([k, v]) => `${k}=${v}`)
+  .join("\n");
+
+return res.status(401).json({
+  error: `DEBUG bot=${botToken.value().split(":")[0]} keys=${[...params.keys()].join(",")} withSig=${tryHash(botToken.value(), dataCheckString)} noSig=${tryHash(botToken.value(), noSig)}`
+});
+
       }
 
       params.delete("hash");
