@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Compass, Users, PlusCircle, UsersRound, UserCircle, Heart, X, MapPin, CalendarDays, Sparkles } from 'lucide-react';
-import { firebaseConfigured } from './lib/firebase';
+import { firebaseConfigured } from './firebase';
 
 type Tab = 'home' | 'people' | 'create' | 'communities' | 'profile';
 const people = [
