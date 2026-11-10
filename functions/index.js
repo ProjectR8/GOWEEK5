@@ -8,6 +8,16 @@ admin.initializeApp();
 const botToken = defineSecret("TELEGRAM_BOT_TOKEN");
 const allowedOrigin = "https://projectr8.github.io";
 
+const byKey = ([a], [b]) => (a < b ? -1 : a > b ? 1 : 0);
+
+function hashFor(token, str) {
+  const secretKey = crypto
+    .createHmac("sha256", "WebAppData")
+    .update(token)
+    .digest();
+  return crypto.createHmac("sha256", secretKey).update(str).digest("hex");
+}
+
 exports.telegramAuth = onRequest(
   {
     region: "europe-west1",
@@ -29,15 +39,6 @@ exports.telegramAuth = onRequest(
       }
 
       const params = new URLSearchParams(initData);
-      const params = new URLSearchParams(initData);
-
-// временные логи
-      console.log("keys:", [...params.keys()]);
-      console.log("token len:", botToken.value().length, "trimmed:", botToken.value().trim().length);
-      console.log("initData len:", initData.length, "has hash:", initData.includes("hash="));
-
-      const hash = params.get("hash");
-
       const hash = params.get("hash");
       const authDate = Number(params.get("auth_date"));
       const userRaw = params.get("user");
@@ -48,47 +49,28 @@ exports.telegramAuth = onRequest(
 
       const now = Math.floor(Date.now() / 1000);
       if (!Number.isFinite(authDate) || authDate > now + 60 || now - authDate > 86400) {
-        const tryHash = (token, str) =>
-  crypto.createHmac("sha256",
-    crypto.createHmac("sha256", "WebAppData").update(token).digest()
-  ).update(str).digest("hex") === hash.toLowerCase();
-
-const noSig = [...params.entries()]
-  .filter(([k]) => k !== "signature")
-  .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-  .map(([k, v]) => `${k}=${v}`)
-  .join("\n");
-
-return res.status(401).json({
-  error: `DEBUG bot=${botToken.value().split(":")[0]} keys=${[...params.keys()].join(",")} withSig=${tryHash(botToken.value(), dataCheckString)} noSig=${tryHash(botToken.value(), noSig)}`
-});
-
+        return res.status(401).json({ error: "Expired Telegram data" });
       }
 
       params.delete("hash");
 
-      const dataCheckString = [...params.entries()]
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([key, value]) => `${key}=${value}`)
-        .join("\n");
+      const entries = [...params.entries()].sort(byKey);
+      const dataCheckString = entries.map(([k, v]) => `${k}=${v}`).join("\n");
 
-      const secretKey = crypto
-        .createHmac("sha256", "WebAppData")
-        .update(botToken.value())
-        .digest();
+      const token = botToken.value().trim();
+      const calculated = hashFor(token, dataCheckString);
 
-      const calculatedHash = crypto
-        .createHmac("sha256", secretKey)
-        .update(dataCheckString)
-        .digest();
+      if (calculated !== hash.toLowerCase()) {
+        // ВРЕМЕННАЯ ДИАГНОСТИКА
+        const noSig = entries
+          .filter(([k]) => k !== "signature")
+          .map(([k, v]) => `${k}=${v}`)
+          .join("\n");
+        const okNoSig = hashFor(token, noSig) === hash.toLowerCase();
 
-      const receivedHash = Buffer.from(hash, "hex");
-
-      if (
-        calculatedHash.length !== receivedHash.length ||
-        !crypto.timingSafeEqual(calculatedHash, receivedHash)
-      ) {
-        return res.status(401).json({ error: "Telegram verification failed" });
+        return res.status(401).json({
+          error: `DEBUG bot=${token.split(":")[0]} keys=${entries.map(([k]) => k).join(",")} noSigMatch=${okNoSig} len=${initData.length}`
+        });
       }
 
       const telegramUser = JSON.parse(userRaw);
@@ -109,8 +91,8 @@ return res.status(401).json({
         });
       }
 
-      const token = await admin.auth().createCustomToken(user.uid);
-      return res.status(200).json({ token });
+      const customToken = await admin.auth().createCustomToken(user.uid);
+      return res.status(200).json({ token: customToken });
     } catch (error) {
       console.error("Telegram auth error:", error);
       return res.status(500).json({ error: "Authentication failed" });
