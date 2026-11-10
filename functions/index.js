@@ -29,6 +29,15 @@ exports.telegramAuth = onRequest(
       }
 
       const params = new URLSearchParams(initData);
+      const params = new URLSearchParams(initData);
+
+// временные логи
+      console.log("keys:", [...params.keys()]);
+      console.log("token len:", botToken.value().length, "trimmed:", botToken.value().trim().length);
+      console.log("initData len:", initData.length, "has hash:", initData.includes("hash="));
+
+      const hash = params.get("hash");
+
       const hash = params.get("hash");
       const authDate = Number(params.get("auth_date"));
       const userRaw = params.get("user");
