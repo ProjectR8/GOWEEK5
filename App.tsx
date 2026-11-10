@@ -1,4 +1,5 @@
-import { useRef, useState } from 'react';
+
+import { useEffect, useRef, useState } from 'react';
 import {
   ArrowRight, ArrowUpRight, Bell, CalendarDays, Check,
   ChevronRight, Compass, MapPin, Plus, Search,
@@ -6,6 +7,25 @@ import {
   X, Clock3, SlidersHorizontal
 } from 'lucide-react';
 import { firebaseConfigured } from './firebase';
+
+type TelegramWebApp = {
+  ready: () => void;
+  expand: () => void;
+  BackButton: {
+    show: () => void;
+    hide: () => void;
+    onClick: (callback: () => void) => void;
+    offClick: (callback: () => void) => void;
+  };
+};
+
+declare global {
+  interface Window {
+    Telegram?: {
+      WebApp?: TelegramWebApp;
+    };
+  }
+}
 
 type Tab = 'home' | 'people' | 'create' | 'communities' | 'profile';
 
@@ -138,6 +158,44 @@ export default function App() {
   const startX = useRef(0);
   const currentPerson = people[personIndex % people.length];
 
+  // Telegram Mini App initialization
+  useEffect(() => {
+    const tg = window.Telegram?.WebApp;
+
+    if (!tg) return;
+
+    tg.ready();
+    tg.expand();
+  }, []);
+
+  // Telegram Back Button
+  useEffect(() => {
+    const tg = window.Telegram?.WebApp;
+
+    if (!tg) return;
+
+    const handleBack = () => {
+      if (detail) {
+        setDetail(null);
+      } else if (tab !== 'home') {
+        setTab('home');
+        setNotice('');
+      }
+    };
+
+    if (detail || tab !== 'home') {
+      tg.BackButton.show();
+    } else {
+      tg.BackButton.hide();
+    }
+
+    tg.BackButton.onClick(handleBack);
+
+    return () => {
+      tg.BackButton.offClick(handleBack);
+    };
+  }, [detail, tab]);
+
   const changeTab = (next: Tab) => {
     setTab(next);
     setNotice('');
@@ -145,6 +203,8 @@ export default function App() {
   };
 
   const finishSwipe = (direction: 'left' | 'right') => {
+    if (swipeDirection) return;
+
     setSwipeDirection(direction);
 
     window.setTimeout(() => {
@@ -395,7 +455,10 @@ export default function App() {
                 onPointerDown={onPointerDown}
                 onPointerMove={onPointerMove}
                 onPointerUp={onPointerUp}
-                onPointerCancel={() => setDragX(0)}
+                onPointerCancel={() => {
+                  setDragX(0);
+                  startX.current = 0;
+                }}
                 style={{
                   transform: `translateX(${
                     swipeDirection === 'right'
