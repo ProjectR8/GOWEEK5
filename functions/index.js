@@ -37,6 +37,18 @@ function cleanString(value, maxLength) {
   return String(value ?? "").trim().slice(0, maxLength);
 }
 
+function isOwnProfileStorageUrl(value, uid) {
+  try {
+    const parsed = new URL(value);
+    const decodedPath = decodeURIComponent(parsed.pathname);
+    return parsed.protocol === "https:" &&
+      parsed.hostname === "firebasestorage.googleapis.com" &&
+      decodedPath.includes(`/profilePhotos/${uid}/`);
+  } catch (_) {
+    return false;
+  }
+}
+
 // Любая неожиданная ошибка превращается в читаемый текст вместо "internal".
 const safe = (fn) => async (request) => {
   try {
@@ -209,6 +221,9 @@ exports.goGetData = onCall(OPTS, safe(async (request) => {
     })
   );
 
+  const photoPostsSnap = await db.collection("profiles").doc(uid)
+    .collection("posts").orderBy("createdAt", "desc").limit(30).get();
+
   const notifications = notifSnap.docs
     .map((d) => {
       const n = d.data();
@@ -246,6 +261,12 @@ exports.goGetData = onCall(OPTS, safe(async (request) => {
     events,
     matches: matchesSnap.docs.map((d) => ({ id: d.id, memberUids: d.data().memberUids || [] })),
     notifications,
+    photoPosts: photoPostsSnap.docs.map((d) => ({
+      id: d.id,
+      photoUrl: d.data().photoUrl || "",
+      caption: d.data().caption || "",
+      createdAt: d.data().createdAt?.toMillis?.() ?? null,
+    })),
     clubMemberships: CLUB_IDS.filter((_, i) => memberSnaps[i].exists),
     clubCounts,
   };
@@ -279,12 +300,18 @@ exports.goSaveProfile = onCall(OPTS, safe(async (request) => {
       tgUsername = cleanString(t.data().username, 64);
       photoUrl = cleanString(t.data().photoUrl, 500);
     }
+  } else if (data.photoUrl !== undefined) {
+    photoUrl = cleanString(data.photoUrl, 1500);
+    if (photoUrl && !isOwnProfileStorageUrl(photoUrl, uid)) {
+      throw new HttpsError("invalid-argument", "Некорректная ссылка на фото профиля");
+    }
   }
 
   await db.collection("profiles").doc(uid).set(
     {
       name, age, city, bio, interests,
-      tgSync: useTelegram, tgUsername, photoUrl, showUsername,
+      tgSync: useTelegram, tgUsername, showUsername,
+      ...(useTelegram || photoUrl ? { photoUrl } : {}),
       isVisible: true,
       updatedAt: FieldValue.serverTimestamp(),
     },
@@ -294,7 +321,30 @@ exports.goSaveProfile = onCall(OPTS, safe(async (request) => {
   return { success: true };
 }));
 
-exports.goDeleteProfile = onCall(OPTS, safe(async (request) => {
+exports.goCreatePhotoPost = onCall(OPTS, safe(async (request) => {
+  const uid = requireUser(request);
+  const photoUrl = cleanString(request.data?.photoUrl, 1500);
+  const caption = cleanString(request.data?.caption, 200);
+
+  if (!isOwnProfileStorageUrl(photoUrl, uid)) {
+    throw new HttpsError("invalid-argument", "Некорректная ссылка на фотографию");
+  }
+
+  const profileRef = db.collection("profiles").doc(uid);
+  const profileSnap = await profileRef.get();
+  if (!profileSnap.exists || profileSnap.data().isVisible !== true) {
+    throw new HttpsError("failed-precondition", "Сначала создай анкету");
+  }
+
+  const postRef = profileRef.collection("posts").doc();
+  await postRef.set({
+    photoUrl,
+    caption,
+    createdAt: FieldValue.serverTimestamp(),
+  });
+
+  return { success: true, postId: postRef.id };
+}));exports.goDeleteProfile = onCall(OPTS, safe(async (request) => {
   const uid = requireUser(request);
   await db.collection("profiles").doc(uid).delete();
   await db.collection("tgData").doc(uid).delete();
