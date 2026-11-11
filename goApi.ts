@@ -22,6 +22,12 @@ export type ApiMatch = { id: string; memberUids: string[] };
 export type ApiNotification = {
   id: string; type: string; title: string; text: string; read: boolean; createdAt: number | null;
 };
+export type ApiPhotoPost = {
+  id: string;
+  photoUrl: string;
+  caption: string;
+  createdAt: number | null;
+};
 export type ApiEvent = {
   id: string; title: string; description: string; category: string; date: string; time: string;
   place: string; createdBy: string; participantCount: number; capacity: number; joined: boolean; status: string;
@@ -35,6 +41,7 @@ export type GoData = {
   events: ApiEvent[];
   matches: ApiMatch[];
   notifications: ApiNotification[];
+  photoPosts: ApiPhotoPost[];
   clubMemberships: string[];
   clubCounts: Record<string, number>;
 };
@@ -44,9 +51,13 @@ const call = <I, O>(name: string) => (data: I) =>
 
 export const goGetData = () => call<Record<string, never>, GoData>('goGetData')({});
 export const goSaveProfile = call<
-  { name: string; age: number; city: string; bio: string; interests: string[]; useTelegram?: boolean; showUsername?: boolean },
+  { name: string; age: number; city: string; bio: string; interests: string[]; useTelegram?: boolean; showUsername?: boolean; photoUrl?: string },
   { success: boolean }
 >('goSaveProfile');
+export const goCreatePhotoPost = call<
+  { photoUrl: string; caption?: string },
+  { success: boolean; postId: string }
+>('goCreatePhotoPost');
 export const goDeleteProfile = () => call<Record<string, never>, { success: boolean }>('goDeleteProfile')({});
 export const goSwipe = call<{ targetUid: string; direction: 'left' | 'right' }, { success: boolean; matched: boolean }>('goSwipe');
 export const goUnlike = call<{ targetUid: string }, { success: boolean }>('goUnlike');
