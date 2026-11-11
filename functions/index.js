@@ -212,6 +212,7 @@ exports.goGetData = onCall(OPTS, safe(async (request) => {
         date: e.date || "",
         time: e.time || "",
         place: e.place || "",
+        city: e.city || "",
         createdBy: e.createdBy || "",
         participantCount: Number(e.participantCount || 0),
         capacity: Number(e.capacity || 30),
@@ -352,6 +353,27 @@ exports.goDeletePhotoPost = onCall(OPTS, safe(async (request) => {
   if (!postId) throw new HttpsError("invalid-argument", "Не указана публикация");
   await db.collection("profiles").doc(uid).collection("posts").doc(postId).delete();
   return { success: true };
+}));
+
+exports.goGetPosts = onCall(OPTS, safe(async (request) => {
+  const uid = requireUser(request);
+  const targetUid = targetUidOf(request);
+  const [me, target] = await Promise.all([
+    db.collection("profiles").doc(uid).get(),
+    db.collection("profiles").doc(targetUid).get(),
+  ]);
+  if (!me.exists) throw new HttpsError("failed-precondition", "Сначала заполни свою анкету");
+  if (!target.exists || target.data().isVisible !== true) throw new HttpsError("not-found", "Анкета недоступна");
+  if (ageGroup(target.data().age) !== ageGroup(me.data().age)) throw new HttpsError("permission-denied", "Анкета недоступна");
+  const snap = await db.collection("profiles").doc(targetUid).collection("posts").orderBy("createdAt", "desc").limit(30).get();
+  return {
+    posts: snap.docs.map((d) => ({
+      id: d.id,
+      photoUrl: d.data().photoUrl || "",
+      caption: d.data().caption || "",
+      createdAt: d.data().createdAt?.toMillis?.() ?? null,
+    })),
+  };
 }));
 
 exports.goDeleteProfile = onCall(OPTS, safe(async (request) => {
@@ -527,10 +549,13 @@ exports.goCreateEvent = onCall(OPTS, safe(async (request) => {
     throw new HttpsError("invalid-argument", "Заполни все поля события");
   }
 
+  const creator = await db.collection("profiles").doc(uid).get();
+  const city = creator.exists ? cleanString(creator.data().city, 60) : "";
+
   const eventRef = db.collection("events").doc();
   const batch = db.batch();
   batch.set(eventRef, {
-    title, description, category, date, time, place, capacity,
+    title, description, category, date, time, place, city, capacity,
     createdBy: uid, participantCount: 1, status: "published",
     createdAt: FieldValue.serverTimestamp(),
   });
