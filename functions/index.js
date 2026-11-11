@@ -344,7 +344,17 @@ exports.goCreatePhotoPost = onCall(OPTS, safe(async (request) => {
   });
 
   return { success: true, postId: postRef.id };
-}));exports.goDeleteProfile = onCall(OPTS, safe(async (request) => {
+}));
+
+exports.goDeletePhotoPost = onCall(OPTS, safe(async (request) => {
+  const uid = requireUser(request);
+  const postId = cleanString(request.data?.postId, 100);
+  if (!postId) throw new HttpsError("invalid-argument", "Не указана публикация");
+  await db.collection("profiles").doc(uid).collection("posts").doc(postId).delete();
+  return { success: true };
+}));
+
+exports.goDeleteProfile = onCall(OPTS, safe(async (request) => {
   const uid = requireUser(request);
   await db.collection("profiles").doc(uid).delete();
   await db.collection("tgData").doc(uid).delete();
