@@ -5,10 +5,12 @@ import {
   Settings, Sparkles, Users, UsersRound, UserRound,
   X, Clock3, SlidersHorizontal
 } from 'lucide-react';
-import { firebaseConfigured } from './firebase';
+import { firebaseConfigured, storage } from './firebase';
+import { getDownloadURL, ref as storageRef, uploadBytes } from 'firebase/storage';
 import { authenticateTelegram } from './telegramAuth';
 import {
   goCreateEvent,
+  goCreatePhotoPost,
   goGetData,
   goJoinEvent,
   goMarkNotificationsRead,
@@ -17,6 +19,7 @@ import {
   goToggleClub,
   type ApiMatch,
   type ApiNotification,
+  type ApiPhotoPost,
   type ApiProfile,
   type GoData,
 } from './goApi';
@@ -58,6 +61,7 @@ type Person = {
   color: string;
   initials: string;
   activity: string;
+  photoUrl?: string;
 };
 
 type EventItem = {
@@ -140,6 +144,10 @@ const demoEvents: EventItem[] = [
   },
 ];
 
+// Старые демо-записи оставлены в исходнике, но не показываются участникам.
+void demoPeople;
+void demoEvents;
+
 const clubs: Club[] = [
   {
     id: 'gaming', title: 'Игровой клуб', members: '128 участников',
@@ -193,6 +201,7 @@ function toPerson(profile: ApiProfile): Person {
     color: colorFor(profile.uid),
     initials: initialsFor(profile.name || ''),
     activity: 'Открыт к совместным активностям',
+    photoUrl: profile.photoUrl || '',
   };
 }
 
@@ -268,9 +277,13 @@ export default function App() {
   const [profileEditing, setProfileEditing] = useState(false);
   const [profileForm, setProfileForm] = useState<ProfileForm>(emptyProfileForm);
   const [profile, setProfile] = useState<ApiProfile | null>(null);
-  const [events, setEvents] = useState<EventItem[]>(firebaseConfigured ? [] : demoEvents);
-  const [allPeople, setAllPeople] = useState<Person[]>(firebaseConfigured ? [] : demoPeople);
-  const [people, setPeople] = useState<Person[]>(firebaseConfigured ? [] : demoPeople);
+  const [events, setEvents] = useState<EventItem[]>([]);
+  const [allPeople, setAllPeople] = useState<Person[]>([]);
+  const [people, setPeople] = useState<Person[]>([]);
+  const [clubCounts, setClubCounts] = useState<Record<string, number>>({});
+  const [photoPosts, setPhotoPosts] = useState<ApiPhotoPost[]>([]);
+  const [eventStep, setEventStep] = useState(0);
+  const [photoBusy, setPhotoBusy] = useState(false);
   const [matches, setMatches] = useState<ApiMatch[]>([]);
   const [notifications, setNotifications] = useState<ApiNotification[]>([]);
   const [clubJoined, setClubJoined] = useState<string[]>([]);
@@ -281,9 +294,12 @@ export default function App() {
     date: '',
     time: '',
     place: '',
+    capacity: '12',
   });
 
   const startX = useRef(0);
+  const avatarInputRef = useRef<HTMLInputElement>(null);
+  const postInputRef = useRef<HTMLInputElement>(null);
 
   const currentPerson = people.find((person) => {
     const search = peopleQuery.trim().toLowerCase();
@@ -382,6 +398,8 @@ export default function App() {
       setMatches(data.matches || []);
       setNotifications(data.notifications || []);
       setClubJoined(data.clubMemberships || []);
+      setClubCounts(data.clubCounts || {});
+      setPhotoPosts(data.photoPosts || []);
 
       if (data.profile) {
         setProfileForm({
@@ -579,8 +597,7 @@ export default function App() {
     }
 
     try {
-      await goJoinEvent({ eventId });
-      await refreshData();
+      await goJoinEvent({ eventId });      await refreshData();
       setNotice('Ты добавлен в список участников.');
     } catch (error) {
       setNotice(
@@ -595,7 +612,10 @@ export default function App() {
       !eventForm.description.trim() ||
       !eventForm.date ||
       !eventForm.time ||
-      !eventForm.place.trim()
+      !eventForm.place.trim() ||
+      !Number.isInteger(Number(eventForm.capacity)) ||
+      Number(eventForm.capacity) < 2 ||
+      Number(eventForm.capacity) > 200
     ) {
       setNotice('Заполни все поля события');
       return;
@@ -622,6 +642,7 @@ export default function App() {
         date: eventForm.date,
         time: eventForm.time,
         place: eventForm.place,
+        capacity: Number(eventForm.capacity),
       });
 
       setEventForm({
@@ -631,7 +652,9 @@ export default function App() {
         date: '',
         time: '',
         place: '',
+        capacity: '12',
       });
+      setEventStep(0);
 
       await refreshData();
 
@@ -643,6 +666,28 @@ export default function App() {
       );
     }
   };
+
+  const nextEventStep = () => {
+    if (eventStep === 0 && !eventForm.title.trim()) {
+      setNotice('Сначала придумай название события');
+      return;
+    }
+    if (eventStep === 1 && (!Number.isInteger(Number(eventForm.capacity)) || Number(eventForm.capacity) < 2 || Number(eventForm.capacity) > 200)) {
+      setNotice('Укажи от 2 до 200 участников');
+      return;
+    }
+    if (eventStep === 2 && !eventForm.time) {
+      setNotice('Выбери время встречи');
+      return;
+    }
+    if (eventStep === 3 && (!eventForm.date || !eventForm.place.trim())) {
+      setNotice('Укажи дату и публичное место встречи');
+      return;
+    }
+    setEventStep((step) => Math.min(4, step + 1));
+  };
+
+  const previousEventStep = () => setEventStep((step) => Math.max(0, step - 1));
 
   const toggleClub = async (clubId: string) => {
     if (!firebaseConfigured || authStatus !== 'signed-in') {
@@ -660,6 +705,7 @@ export default function App() {
           ? [...new Set([...old, clubId])]
           : old.filter((id) => id !== clubId)
       );
+      setClubCounts((old) => ({ ...old, [clubId]: result.count }));
 
       setNotice(
         result.joined
@@ -714,6 +760,75 @@ export default function App() {
       setNotice(
         `Не удалось сохранить анкету: ${errorMessage(error)}`
       );
+    }
+  };
+
+  const uploadAvatar = async (file: File | undefined) => {
+    if (!file) return;
+    if (!profile || !storage || authStatus !== 'signed-in') {
+      setNotice('Сначала сохрани анкету и войди через Telegram');
+      return;
+    }
+    if (!file.type.startsWith('image/')) {
+      setNotice('Выбери файл изображения');
+      return;
+    }
+    if (file.size > 8 * 1024 * 1024) {
+      setNotice('Фото должно быть не больше 8 МБ');
+      return;
+    }
+    setPhotoBusy(true);
+    try {
+      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 80);
+      const imageRef = storageRef(storage, `profilePhotos/${profile.uid}/avatar/${Date.now()}-${safeName}`);
+      const uploaded = await uploadBytes(imageRef, file, { contentType: file.type });
+      const photoUrl = await getDownloadURL(uploaded.ref);
+      await goSaveProfile({
+        name: profile.name,
+        age: profile.age,
+        city: profile.city || '',
+        bio: profile.bio || '',
+        interests: profile.interests || [],
+        photoUrl,
+      });
+      await refreshData();
+      setNotice('Фото профиля обновлено');
+    } catch (error) {
+      setNotice(`Не удалось загрузить фото: ${errorMessage(error)}`);
+    } finally {
+      setPhotoBusy(false);
+      if (avatarInputRef.current) avatarInputRef.current.value = '';
+    }
+  };
+
+  const createPhotoPost = async (file: File | undefined) => {
+    if (!file) return;
+    if (!profile || !storage || authStatus !== 'signed-in') {
+      setNotice('Сначала создай и сохрани анкету');
+      return;
+    }
+    if (!file.type.startsWith('image/')) {
+      setNotice('Выбери файл изображения');
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      setNotice('Фото должно быть не больше 10 МБ');
+      return;
+    }
+    setPhotoBusy(true);
+    try {
+      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 80);
+      const imageRef = storageRef(storage, `profilePhotos/${profile.uid}/posts/${Date.now()}-${safeName}`);
+      const uploaded = await uploadBytes(imageRef, file, { contentType: file.type });
+      const photoUrl = await getDownloadURL(uploaded.ref);
+      await goCreatePhotoPost({ photoUrl, caption: '' });
+      await refreshData();
+      setNotice('Фото опубликовано в профиле');
+    } catch (error) {
+      setNotice(`Не удалось опубликовать фото: ${errorMessage(error)}`);
+    } finally {
+      setPhotoBusy(false);
+      if (postInputRef.current) postInputRef.current.value = '';
     }
   };
 
@@ -817,7 +932,7 @@ export default function App() {
       {!firebaseConfigured && (
         <div className="setup-banner">
           <span className="pulse" />
-          Демо-режим: Firebase не настроен, действия не сохраняются на сервере.
+          Firebase не настроен: загрузка и публикация данных недоступны.
         </div>
       )}
 
@@ -939,7 +1054,7 @@ export default function App() {
                     }}
                   >
                     <span className={`mini-avatar ${person.color}`}>
-                      {person.initials}
+                      {person.photoUrl ? <img src={person.photoUrl} alt="" /> : person.initials}
                     </span>
 
                     <span>
@@ -1012,7 +1127,7 @@ export default function App() {
                       onClick={() => openPerson(person.uid)}
                     >
                       <span className={`mini-avatar ${person.color}`}>
-                        {person.initials}
+                        {person.photoUrl ? <img src={person.photoUrl} alt="" /> : person.initials}
                       </span>
 
                       <span>
@@ -1073,14 +1188,15 @@ export default function App() {
                       <div className="person-art-orb" />
                       <span className="person-number">GO / PROFILE</span>
 
-                      <div className="person-avatar">
-                        {currentPerson.initials}
-                      </div>
+                      {currentPerson.photoUrl ? (
+                        <img className="person-photo" src={currentPerson.photoUrl} alt={currentPerson.name} draggable={false} />
+                      ) : (
+                        <div className="person-avatar">{currentPerson.initials}</div>
+                      )}
 
                       <span className="online-pill">
                         <i /> В поиске компании
-                      </span>
-                    </div>
+                      </span>                    </div>
 
                     <div
                       className="person-info"
@@ -1164,123 +1280,86 @@ export default function App() {
         )}
 
         {tab === 'create' && (
-          <section className="screen placeholder-page">
-            <div className="placeholder-icon">
-              <Plus size={28} />
+          <section className="screen placeholder-page create-page">
+            <div className="eyebrow">ТВОЯ ИДЕЯ — ТВОЁ СОБЫТИЕ</div>
+            <h1 className="page-title">Создай<br /><span>движение.</span></h1>
+            <p>Заполни пять коротких шагов — данные сохранятся при переходе назад.</p>
+            <div className="wizard-heading">
+              <span>ШАГ {eventStep + 1} ИЗ 5</span>
+              <b>{['Название', 'Участники', 'Время', 'Дата и место', 'Описание'][eventStep]}</b>
             </div>
-
-            <div className="eyebrow">
-              ТВОЯ ИДЕЯ — ТВОЁ СОБЫТИЕ
+            <div className="wizard-progress" aria-label={`Шаг ${eventStep + 1} из 5`}>
+              {[0, 1, 2, 3, 4].map((step) => <span key={step} className={step <= eventStep ? 'filled' : ''} />)}
             </div>
-
-            <h1 className="page-title">
-              Создай<br />
-              <span>движение.</span>
-            </h1>
-
-            <p>
-              Собери людей вокруг идеи: прогулка, игра,
-              тренировка или совместный проект.
-            </p>
-
-            <div className="form-preview">
-              <label>
-                Название встречи
-                <input
-                  value={eventForm.title}
-                  onChange={(event) =>
-                    setEventForm((old) => ({
-                      ...old,
-                      title: event.target.value,
-                    }))
-                  }
-                  placeholder="Например, вечер настолок"
-                  maxLength={70}
-                />
-              </label>
-
-              <label>
-                Что планируете?
-                <textarea
-                  value={eventForm.description}
-                  onChange={(event) =>
-                    setEventForm((old) => ({
-                      ...old,
-                      description: event.target.value,
-                    }))
-                  }
-                  placeholder="Расскажи немного о встрече..."
-                  rows={3}
-                  maxLength={500}
-                />
-              </label>
-
-              <label>
-                Категория
-                <input
-                  value={eventForm.category}
-                  onChange={(event) =>
-                    setEventForm((old) => ({
-                      ...old,
-                      category: event.target.value,
-                    }))
-                  }
-                  placeholder="Встреча, технологии, творчество"
-                  maxLength={30}
-                />
-              </label>
-
-              <label>
-                Дата
-                <input
-                  type="date"
-                  value={eventForm.date}
-                  onChange={(event) =>
-                    setEventForm((old) => ({
-                      ...old,
-                      date: event.target.value,
-                    }))
-                  }
-                />
-              </label>
-
-              <label>
-                Время
-                <input
-                  type="time"
-                  value={eventForm.time}
-                  onChange={(event) =>
-                    setEventForm((old) => ({
-                      ...old,
-                      time: event.target.value,
-                    }))
-                  }
-                />
-              </label>
-
-              <label>
-                Место встречи
-                <input
-                  value={eventForm.place}
-                  onChange={(event) =>
-                    setEventForm((old) => ({
-                      ...old,
-                      place: event.target.value,
-                    }))
-                  }
-                  placeholder="Парк, молодёжный центр или онлайн"
-                  maxLength={100}
-                />
-              </label>
-
-              <button
-                className="primary"
-                onClick={() => void createEvent()}
-                disabled={dataLoading}
-              >
-                Опубликовать событие <ArrowRight size={16} />
-              </button>
+            <div className="wizard-card" key={eventStep}>
+              {eventStep === 0 && (
+                <div className="wizard-step">
+                  <div className="wizard-step-number">01</div>
+                  <h2>Как назовём встречу?</h2>
+                  <p>Название должно коротко объяснять, что вы собираетесь делать.</p>
+                  <label>Название события
+                    <input autoFocus value={eventForm.title} onChange={(event) => setEventForm((old) => ({ ...old, title: event.target.value }))} placeholder="Например, прогулка и фото" maxLength={70} />
+                  </label>
+                </div>
+              )}
+              {eventStep === 1 && (
+                <div className="wizard-step">
+                  <div className="wizard-step-number">02</div>
+                  <h2>Сколько человек собираем?</h2>
+                  <p>Ты автоматически попадёшь в список участников после публикации.</p>
+                  <label>Максимум участников
+                    <input autoFocus type="number" min="2" max="200" value={eventForm.capacity} onChange={(event) => setEventForm((old) => ({ ...old, capacity: event.target.value }))} placeholder="12" />
+                  </label>
+                  <span className="wizard-hint">От 2 до 200 человек</span>
+                </div>
+              )}
+              {eventStep === 2 && (
+                <div className="wizard-step">
+                  <div className="wizard-step-number">03</div>
+                  <h2>Во сколько встречаемся?</h2>
+                  <p>Выбери время начала встречи.</p>
+                  <label>Время
+                    <input autoFocus type="time" value={eventForm.time} onChange={(event) => setEventForm((old) => ({ ...old, time: event.target.value }))} />
+                  </label>
+                </div>
+              )}
+              {eventStep === 3 && (
+                <div className="wizard-step">
+                  <div className="wizard-step-number">04</div>
+                  <h2>Где и когда?</h2>
+                  <p>Укажи общественное место, доступное всем участникам.</p>
+                  <label>Дата
+                    <input autoFocus type="date" value={eventForm.date} onChange={(event) => setEventForm((old) => ({ ...old, date: event.target.value }))} />
+                  </label>
+                  <label>Публичное место встречи
+                    <input value={eventForm.place} onChange={(event) => setEventForm((old) => ({ ...old, place: event.target.value }))} placeholder="Например, городской парк" maxLength={100} />
+                  </label>
+                  <span className="wizard-hint">Не указывай домашний адрес или точное место проживания.</span>
+                </div>
+              )}
+              {eventStep === 4 && (
+                <div className="wizard-step">
+                  <div className="wizard-step-number">05</div>
+                  <h2>Расскажи подробности</h2>
+                  <p>Что будете делать и кому подойдёт встреча?</p>
+                  <label>Описание
+                    <textarea autoFocus value={eventForm.description} onChange={(event) => setEventForm((old) => ({ ...old, description: event.target.value }))} placeholder="Расскажи немного о встрече..." rows={4} maxLength={500} />
+                  </label>
+                  <label>Категория <span className="optional-label">необязательно</span>
+                    <input value={eventForm.category} onChange={(event) => setEventForm((old) => ({ ...old, category: event.target.value }))} placeholder="Встреча" maxLength={30} />
+                  </label>
+                </div>
+              )}
             </div>
+            <div className="wizard-actions">
+              {eventStep > 0 && <button className="wizard-back" onClick={previousEventStep}>Назад</button>}
+              {eventStep < 4 ? (
+                <button className="primary wizard-next" onClick={nextEventStep}>Далее <ArrowRight size={16} /></button>
+              ) : (
+                <button className="primary wizard-next" onClick={() => void createEvent()} disabled={dataLoading || photoBusy}>Опубликовать <ArrowRight size={16} /></button>
+              )}
+            </div>
+            <p className="safety-note">Встречайтесь в общественных местах. Не публикуй домашние адреса.</p>
           </section>
         )}
 
@@ -1324,7 +1403,7 @@ export default function App() {
 
                     <span className="community-copy">
                       <b>{club.title}</b>
-                      <small>{club.members}</small>
+                      <small>{Number(clubCounts[club.id] || 0)} участников</small>
                       <span>{club.description}</span>
                     </span>
 
@@ -1343,194 +1422,106 @@ export default function App() {
 
         {tab === 'profile' && (
           <section className="screen profile-page">
+            <input ref={avatarInputRef} className="visually-hidden-input" type="file" accept="image/*" onChange={(event) => void uploadAvatar(event.target.files?.[0])} />
+            <input ref={postInputRef} className="visually-hidden-input" type="file" accept="image/*" onChange={(event) => void createPhotoPost(event.target.files?.[0])} />
             <div className="profile-cover">
-              <div className="profile-avatar">
-                {profile ? initialsFor(profile.name) : 'G'}
-              </div>
-
-              <button
-                className="profile-settings"
-                aria-label="Настройки"
-                onClick={() => setProfileEditing(true)}
-              >
+              {profile?.photoUrl ? (
+                <img className="profile-avatar-image" src={profile.photoUrl} alt="Фото профиля" />
+              ) : (
+                <div className="profile-avatar">{profile ? initialsFor(profile.name) : 'G'}</div>
+              )}
+              {profile && (
+                <button className="profile-add-post" aria-label="Добавить публикацию" onClick={() => postInputRef.current?.click()} disabled={photoBusy}>
+                  <Plus size={18} />
+                </button>
+              )}
+              <button className="profile-settings" aria-label="Настройки" onClick={() => setProfileEditing(true)}>
                 <Settings size={18} />
               </button>
             </div>
-
             <div className="eyebrow">ТВОЯ СТРАНИЦА</div>
-
-            <h1 className="page-title">Твой профиль.</h1>
-
-            <p className="muted">
-              Расскажи о себе, чтобы находить людей со схожими интересами.
-            </p>
-
+            <div className="profile-title-row">
+              <h1 className="page-title">{profile?.name || 'Твой профиль'}.</h1>
+              {profile && !profileEditing && <button className="profile-edit-icon" onClick={() => setProfileEditing(true)} aria-label="Изменить профиль"><Settings size={17} /></button>}
+            </div>
             {profile && !profileEditing ? (
               <>
+                <p className="muted profile-bio">{profile.bio || 'Добавь пару слов о себе.'}</p>
+                <div className="profile-stats">
+                  <div><b>{photoPosts.length}</b><span>публикации</span></div>
+                  <div><b>{matches.length}</b><span>совпадения</span></div>
+                  <div><b>{events.filter((event) => event.joined).length}</b><span>события</span></div>
+                </div>
                 <div className="profile-fields">
-                  <div>
-                    <span>Имя</span>
-                    <b>{profile.name}</b>
-                  </div>
-
-                  <div>
-                    <span>Возраст</span>
-                    <b>{profile.age}</b>
-                  </div>
-
-                  <div>
+                  <div><span>Возраст</span><b>{profile.age}</b></div>
+                  <div><span>Город</span><b>{profile.city || 'Не указан'}</b></div>
+                  <div className="profile-interest-row">
                     <span>Интересы</span>
-                    <b>{profile.interests?.join(', ') || 'Не указаны'}</b>
-                  </div>
-
-                  <div>
-                    <span>Город</span>
-                    <b>{profile.city || 'Не указан'}</b>
+                    <div className="tags">{(profile.interests || []).map((tag) => <span key={tag}>{tag}</span>)}</div>
                   </div>
                 </div>
-
-                {profile.bio && (
-                  <p className="muted">{profile.bio}</p>
-                )}
-
-                <button
-                  className="primary full"
-                  onClick={() => setProfileEditing(true)}
-                >
-                  Изменить анкету <ArrowRight size={16} />
-                </button>
+                <button className="primary full" onClick={() => setProfileEditing(true)}>Изменить анкету <ArrowRight size={16} /></button>
               </>
             ) : (
-              <div className="form-preview">
-                <label>
-                  Имя
-                  <input
-                    value={profileForm.name}
-                    onChange={(event) =>
-                      setProfileForm((old) => ({
-                        ...old,
-                        name: event.target.value,
-                      }))
-                    }
-                    placeholder="Как тебя зовут?"
-                    maxLength={40}
-                  />
-                </label>
-
-                <label>
-                  Возраст (13–17)
-                  <input
-                    type="number"
-                    min="13"
-                    max="17"
-                    value={profileForm.age}
-                    onChange={(event) =>
-                      setProfileForm((old) => ({
-                        ...old,
-                        age: event.target.value,
-                      }))
-                    }
-                    placeholder="Например, 16"
-                  />
-                </label>
-
-                <label>
-                  Город
-                  <input
-                    value={profileForm.city}
-                    onChange={(event) =>
-                      setProfileForm((old) => ({
-                        ...old,
-                        city: event.target.value,
-                      }))
-                    }
-                    placeholder="Твой город"
-                    maxLength={60}
-                  />
-                </label>
-
-                <label>
-                  О себе
-                  <textarea
-                    value={profileForm.bio}
-                    onChange={(event) =>
-                      setProfileForm((old) => ({
-                        ...old,
-                        bio: event.target.value,
-                      }))
-                    }
-                    placeholder="Расскажи, что тебе интересно..."
-                    rows={3}
-                    maxLength={300}
-                  />
-                </label>
-
-                <label>
-                  Интересы через запятую
-                  <input
-                    value={profileForm.interests}
-                    onChange={(event) =>
-                      setProfileForm((old) => ({
-                        ...old,
-                        interests: event.target.value,
-                      }))
-                    }
-                    placeholder="Музыка, игры, прогулки"
-                  />
-                </label>
-
-                <button
-                  className="primary"
-                  onClick={() => void saveProfile()}
-                >
-                  Сохранить анкету <Check size={16} />
-                </button>
-
-                {profile && (
-                  <button
-                    className="text-button"
-                    onClick={() => setProfileEditing(false)}
-                  >
-                    Отмена
-                  </button>
-                )}
-              </div>
+              <>
+                <p className="muted">Расскажи о себе, чтобы находить людей со схожими интересами.</p>
+                <div className="form-preview">
+                  {profile && (
+                    <button type="button" className="avatar-upload-button" onClick={() => avatarInputRef.current?.click()} disabled={photoBusy}>
+                      <UserRound size={17} /> {photoBusy ? 'Загружаем фото...' : 'Изменить фото профиля'}
+                    </button>
+                  )}
+                  <label>Имя
+                    <input value={profileForm.name} onChange={(event) => setProfileForm((old) => ({ ...old, name: event.target.value }))} placeholder="Как тебя зовут?" maxLength={40} />
+                  </label>
+                  <label>Возраст (13–17)
+                    <input type="number" min="13" max="17" value={profileForm.age} onChange={(event) => setProfileForm((old) => ({ ...old, age: event.target.value }))} placeholder="Например, 16" />
+                  </label>
+                  <label>Город
+                    <input value={profileForm.city} onChange={(event) => setProfileForm((old) => ({ ...old, city: event.target.value }))} placeholder="Твой город" maxLength={60} />
+                  </label>
+                  <label>О себе
+                    <textarea value={profileForm.bio} onChange={(event) => setProfileForm((old) => ({ ...old, bio: event.target.value }))} placeholder="Расскажи, что тебе интересно..." rows={3} maxLength={300} />
+                  </label>
+                  <label>Интересы через запятую
+                    <input value={profileForm.interests} onChange={(event) => setProfileForm((old) => ({ ...old, interests: event.target.value }))} placeholder="Музыка, игры, прогулки" />
+                  </label>
+                  <button className="primary" onClick={() => void saveProfile()} disabled={photoBusy}>Сохранить анкету <Check size={16} /></button>
+                  {profile && <button className="text-button" onClick={() => setProfileEditing(false)}>Отмена</button>}
+                </div>
+              </>
             )}
-
+            <section className="profile-posts">
+              <div className="profile-posts-heading">
+                <div><div className="eyebrow">ТВОИ МОМЕНТЫ</div><h2>Публикации</h2></div>
+                {profile && <button className="text-button" onClick={() => postInputRef.current?.click()} disabled={photoBusy}><Plus size={15} /> Добавить</button>}
+              </div>
+              {photoPosts.length > 0 ? (
+                <div className="photo-grid">
+                  {photoPosts.map((post) => <div className="photo-tile" key={post.id}><img src={post.photoUrl} alt={post.caption || 'Публикация профиля'} loading="lazy" /></div>)}
+                </div>
+              ) : (
+                <div className="profile-empty-posts">
+                  <div className="profile-empty-icon"><Plus size={22} /></div>
+                  <b>Пока нет публикаций</b>
+                  <span>Добавь фотографии — они появятся здесь.</span>
+                  {profile && <button className="text-button" onClick={() => postInputRef.current?.click()} disabled={photoBusy}>Опубликовать первое фото</button>}
+                </div>
+              )}
+            </section>
             <div className="profile-status">
-              <span
-                className={
-                  authStatus === 'signed-in'
-                    ? 'status-on'
-                    : 'status-off'
-                }
-              />
-
+              <span className={authStatus === 'signed-in' ? 'status-on' : 'status-off'} />
               Telegram: {
-                authStatus === 'checking'
-                  ? 'проверяем вход...'
-                  : authStatus === 'signed-in'
-                    ? 'авторизован ✓'
-                    : authStatus === 'not-in-telegram'
-                      ? 'открой через Telegram'
-                      : 'ошибка входа'
+                authStatus === 'checking' ? 'проверяем вход...' :
+                authStatus === 'signed-in' ? 'авторизован ✓' :
+                authStatus === 'not-in-telegram' ? 'открой через Telegram' : 'ошибка входа'
               }
             </div>
-
             <div className="profile-status">
-              <span
-                className={
-                  firebaseConfigured ? 'status-on' : 'status-off'
-                }
-              />
+              <span className={firebaseConfigured ? 'status-on' : 'status-off'} />
               Firebase: {firebaseConfigured ? 'подключён' : 'не настроен'}
             </div>
-
-            {dataLoading && (
-              <div className="profile-status">
-                Загружаем данные...
-              </div>
-            )}
+            {dataLoading && <div className="profile-status">Загружаем данные...</div>}
           </section>
         )}
       </main>
@@ -1586,9 +1577,11 @@ export default function App() {
             {detail.type === 'person' && detailPerson && (
               <>
                 <div className={`detail-person-art ${detailPerson.color}`}>
-                  <div className="person-avatar large">
-                    {detailPerson.initials}
-                  </div>
+                  {detailPerson.photoUrl ? (
+                    <img className="person-detail-photo" src={detailPerson.photoUrl} alt={detailPerson.name} />
+                  ) : (
+                    <div className="person-avatar large">{detailPerson.initials}</div>
+                  )}
 
                   <span className="online-pill">
                     <i /> {detailPerson.activity}
@@ -1696,7 +1689,7 @@ export default function App() {
                 <h1>{detailClub.title}</h1>
 
                 <div className="muted">
-                  {detailClub.members}
+                  {Number(clubCounts[detailClub.id] || 0)} участников
                 </div>
 
                 <p>{detailClub.description}</p>
