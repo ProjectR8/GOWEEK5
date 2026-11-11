@@ -581,4 +581,4 @@ exports.goMarkNotificationsRead = onCall(OPTS, safe(async (request) => {
   });
 
   return { success: true, updated };
-}));
+}));.
