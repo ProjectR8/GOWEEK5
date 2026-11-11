@@ -30,7 +30,7 @@ export type ApiPhotoPost = {
 };
 export type ApiEvent = {
   id: string; title: string; description: string; category: string; date: string; time: string;
-  place: string; createdBy: string; participantCount: number; capacity: number; joined: boolean; status: string;
+  place: string; city?: string; createdBy: string; participantCount: number; capacity: number; joined: boolean; status: string;
 };
 export type GoData = {
   profile: ApiProfile | null;
@@ -73,3 +73,4 @@ export const goLeaveEvent = call<{ eventId: string }, { success: boolean }>('goL
 export const goDeleteEvent = call<{ eventId: string }, { success: boolean }>('goDeleteEvent');
 export const goToggleClub = call<{ clubId: string }, { joined: boolean; count: number }>('goToggleClub');
 export const goMarkNotificationsRead = call<{ notificationIds: string[] }, { success: boolean; updated: number }>('goMarkNotificationsRead');
+export const goGetPosts = call<{ targetUid: string }, { posts: ApiPhotoPost[] }>('goGetPosts');
