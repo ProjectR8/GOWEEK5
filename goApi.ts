@@ -58,6 +58,7 @@ export const goCreatePhotoPost = call<
   { photoUrl: string; caption?: string },
   { success: boolean; postId: string }
 >('goCreatePhotoPost');
+export const goDeletePhotoPost = call<{ postId: string }, { success: boolean }>('goDeletePhotoPost');
 export const goDeleteProfile = () => call<Record<string, never>, { success: boolean }>('goDeleteProfile')({});
 export const goSwipe = call<{ targetUid: string; direction: 'left' | 'right' }, { success: boolean; matched: boolean }>('goSwipe');
 export const goUnlike = call<{ targetUid: string }, { success: boolean }>('goUnlike');
