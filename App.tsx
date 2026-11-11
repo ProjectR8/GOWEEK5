@@ -3,7 +3,7 @@ import {
   ArrowRight, ArrowUpRight, Bell, CalendarDays, Check,
   ChevronRight, Compass, MapPin, Plus, Search,
   Settings, Sparkles, Users, UsersRound, UserRound,
-  X, Clock3, SlidersHorizontal, LayoutGrid, Trash2, Camera
+  X, Clock3, SlidersHorizontal, LayoutGrid, Trash2, Camera, Star, Gamepad2, Palette, Cpu
 } from 'lucide-react';
 import { firebaseConfigured, storage } from './firebase';
 import { deleteObject, getDownloadURL, ref as storageRef, uploadBytes } from 'firebase/storage';
@@ -14,6 +14,7 @@ import {
   goCreatePhotoPost,
   goDeletePhotoPost,
   goGetData,
+  goGetPosts,
   goJoinEvent,
   goMarkNotificationsRead,
   goSaveProfile,
@@ -37,6 +38,9 @@ type TelegramWebApp = {
   };
   ready: () => void;
   expand: () => void;
+  disableVerticalSwipes?: () => void;
+  setHeaderColor?: (color: string) => void;
+  setBackgroundColor?: (color: string) => void;
   BackButton: {
     show: () => void;
     hide: () => void;
@@ -79,6 +83,9 @@ type EventItem = {
   joined: boolean;
   color: string;
   description: string;
+  forYou?: boolean;
+  city?: string;
+  nearby?: boolean;
 };
 
 type Club = {
@@ -87,6 +94,8 @@ type Club = {
   members: string;
   description: string;
   icon: string;
+  keywords: string[];
+  perks: string[];
 };
 
 type Detail =
@@ -150,18 +159,37 @@ const demoEvents: EventItem[] = [
 void demoPeople;
 void demoEvents;
 
+const CITIES = [
+  'Москва', 'Санкт-Петербург', 'Новосибирск', 'Екатеринбург', 'Казань', 'Нижний Новгород', 'Челябинск', 'Самара',
+  'Омск', 'Ростов-на-Дону', 'Уфа', 'Красноярск', 'Воронеж', 'Пермь', 'Волгоград', 'Краснодар', 'Саратов', 'Тюмень',
+  'Тольятти', 'Ижевск', 'Барнаул', 'Ульяновск', 'Иркутск', 'Хабаровск', 'Ярославль', 'Владивосток', 'Махачкала',
+  'Томск', 'Оренбург', 'Кемерово', 'Новокузнецк', 'Рязань', 'Астрахань', 'Набережные Челны', 'Пенза', 'Липецк',
+  'Киров', 'Чебоксары', 'Калининград', 'Тула', 'Курск', 'Сочи', 'Ставрополь', 'Улан-Удэ', 'Тверь', 'Магнитогорск',
+  'Иваново', 'Брянск', 'Белгород', 'Сургут', 'Владимир', 'Нижний Тагил', 'Архангельск', 'Чита', 'Калуга', 'Смоленск',
+  'Курган', 'Череповец', 'Орёл', 'Вологда', 'Мурманск', 'Саранск', 'Якутск', 'Йошкар-Ола', 'Тамбов', 'Кострома',
+  'Нижневартовск', 'Новороссийск', 'Каменск-Уральский', 'Первоуральск',
+];
+
+const CATEGORIES = ['Встреча', 'Игры', 'Творчество', 'Технологии', 'Спорт'];
+
 const clubs: Club[] = [
   {
-    id: 'gaming', title: 'Игровой клуб', members: '128 участников',
-    description: 'Настольные и видеоигры, командные вечера и турниры без токсичности.', icon: 'game',
+    id: 'gaming', title: 'Игровой клуб', members: '',
+    description: 'Для тех, кто любит настолки и видеоигры. Находи команду и ходи на игровые встречи.',
+    icon: 'game', keywords: ['игр', 'настол', 'гейм', 'турнир', 'game'],
+    perks: ['Все игровые события в одном месте', 'Такие события появляются у тебя в «Для тебя»', 'Можно создать игровую встречу прямо из клуба'],
   },
   {
-    id: 'art', title: 'Арт-комьюнити', members: '86 участников',
-    description: 'Рисование, дизайн, фотография и творческие челленджи.', icon: 'art',
+    id: 'art', title: 'Арт-комьюнити', members: '',
+    description: 'Рисование, фото, дизайн и музыка. Для тех, кто любит создавать и делиться.',
+    icon: 'art', keywords: ['твор', 'рис', 'арт', 'фото', 'дизайн', 'музык'],
+    perks: ['Творческие встречи и прогулки с фото', 'Такие события появляются у тебя в «Для тебя»', 'Можно создать встречу прямо из клуба'],
   },
   {
-    id: 'tech', title: 'Технологии', members: '54 участника',
-    description: 'Программирование, электроника, пет-проекты и взаимопомощь.', icon: 'tech',
+    id: 'tech', title: 'Технологии', members: '',
+    description: 'Код, электроника и пет-проекты. Собирай команду и ходи на хакатоны.',
+    icon: 'tech', keywords: ['тех', 'код', 'програм', 'хакатон', 'it', 'робот'],
+    perks: ['Хакатоны и встречи для разработчиков', 'Такие события появляются у тебя в «Для тебя»', 'Можно создать встречу прямо из клуба'],
   },
 ];
 
@@ -176,6 +204,65 @@ const nav = [
 const emptyProfileForm: ProfileForm = {
   name: '', age: '', city: '', bio: '', interests: '',
 };
+
+function ClubIcon({ id, size }: { id: string; size: number }) {
+  const Icon = id === 'game' ? Gamepad2 : id === 'art' ? Palette : Cpu;
+  return <Icon size={size} />;
+}
+
+const norm = (value: string) => value.trim().toLowerCase();
+
+function sameInterest(a: string, b: string) {
+  const x = norm(a);
+  const y = norm(b);
+  if (!x || !y) return false;
+  return x === y || (x.length >= 4 && y.length >= 4 && (x.includes(y) || y.includes(x)));
+}
+
+function scorePerson(me: ApiProfile | null, p: Person) {
+  if (!me) return { score: 0, percent: 0, shared: [] as string[] };
+  const mine = me.interests || [];
+  const shared = p.interests.filter((tag) => mine.some((m) => sameInterest(m, tag)));
+  let score = shared.length * 3;
+  const sameCity = Boolean(me.city && p.city && norm(me.city) === norm(p.city));
+  if (sameCity) score += 3;
+  const diff = Math.abs((me.age || 0) - p.age);
+  score += diff === 0 ? 3 : diff === 1 ? 2 : diff <= 2 ? 1 : 0;
+  if (p.photoUrl) score += 1;
+  const maxScore = Math.min(5, Math.max(1, mine.length, p.interests.length)) * 3 + 7;
+  const percent = Math.max(5, Math.min(99, Math.round((score / maxScore) * 100)));
+  return { score, percent, shared };
+}
+
+function todayStr() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function isUpcoming(date: string) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(date) ? date >= todayStr() : true;
+}
+
+function withinDays(date: string, days: number) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
+  const diff = (new Date(`${date}T12:00:00`).getTime() - Date.now()) / 86400000;
+  return diff <= days;
+}
+
+function eventInClub(event: EventItem, club: Club) {
+  const text = norm(`${event.category} ${event.title}`);
+  return club.keywords.some((word) => text.includes(word));
+}
+
+function isForYou(me: ApiProfile | null, joined: string[], event: EventItem) {
+  const byClub = clubs.some((club) => joined.includes(club.id) && eventInClub(event, club));
+  const text = norm(`${event.title} ${event.category} ${event.description}`);
+  const byInterest = (me?.interests || []).some((tag) => {
+    const n = norm(tag);
+    return n.length >= 3 && text.includes(n);
+  });
+  return byClub || byInterest;
+}
 
 function initialsFor(name: string) {
   return name.trim().slice(0, 1).toUpperCase() || '?';
@@ -210,7 +297,7 @@ function toPerson(profile: ApiProfile): Person {
 function eventColor(category: string) {
   const value = category.toLowerCase();
 
-  if (value.includes('тех') || value.includes('код') || value.includes('онлайн')) {
+  if (value.includes('тех') || value.includes('код') || value.includes('онлайн') || value.includes('спорт')) {
     return 'orange';
   }
 
@@ -232,6 +319,7 @@ function toEvent(event: GoData['events'][number]): EventItem {
     date: event.date,
     time: event.time,
     place: event.place,
+    city: event.city || '',
     people: `${count} из ${capacity} участников`,
     participantCount: count,
     capacity,
@@ -301,6 +389,14 @@ export default function App() {
   const [notifications, setNotifications] = useState<ApiNotification[]>([]);
   const [clubJoined, setClubJoined] = useState<string[]>([]);
   const [viewPost, setViewPost] = useState<ApiPhotoPost | null>(null);
+  const [kbOpen, setKbOpen] = useState(false);
+  const [createStarted, setCreateStarted] = useState(false);
+  const [eventsOpen, setEventsOpen] = useState(false);
+  const [eventFilter, setEventFilter] = useState<'all' | 'you' | 'near' | 'today' | 'week'>('all');
+  const [onlyMyCity, setOnlyMyCity] = useState(false);
+  const [cityOther, setCityOther] = useState(false);
+  const [ageRange, setAgeRange] = useState<'any' | '1' | '2'>('any');
+  const [personPosts, setPersonPosts] = useState<{ uid: string; posts: ApiPhotoPost[] }>({ uid: '', posts: [] });
   const [eventForm, setEventForm] = useState({
     title: '',
     description: '',
@@ -312,10 +408,48 @@ export default function App() {
   });
 
   const startX = useRef(0);
+  const moved = useRef(false);
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const postInputRef = useRef<HTMLInputElement>(null);
 
-  const currentPerson = people.find((person) => {
+  const rankedPeople = [...people]
+    .map((person) => ({ person, score: scorePerson(profile, person).score }))
+    .sort((x, y) => y.score - x.score)
+    .map((item) => item.person);
+
+  const matchLine = (person: Person) => {
+    const m = scorePerson(profile, person);
+    return m.shared.length
+      ? `Общее: ${m.shared.slice(0, 2).join(', ')}`
+      : person.interests[0] || 'Новые знакомства';
+  };
+
+  const upcomingEvents: EventItem[] = events
+    .filter((event) => isUpcoming(event.date))
+    .map((event) => ({
+      ...event,
+      forYou: isForYou(profile, clubJoined, event),
+      nearby: Boolean(profile?.city && event.city && norm(profile.city) === norm(event.city)),
+    }))
+    .sort((x, y) => Number(Boolean(y.nearby)) - Number(Boolean(x.nearby)) || `${x.date}${x.time}`.localeCompare(`${y.date}${y.time}`));
+
+  const filteredEvents = upcomingEvents.filter((event) =>
+    eventFilter === 'all' ? true
+      : eventFilter === 'you' ? Boolean(event.forYou)
+      : eventFilter === 'near' ? Boolean(event.nearby)
+      : eventFilter === 'today' ? event.date === todayStr()
+      : withinDays(event.date, 7)
+  );
+
+  const passesFilters = (person: Person) => {
+    if (onlyMyCity && profile?.city && norm(person.city) !== norm(profile.city)) return false;
+    if (ageRange !== 'any' && profile && Math.abs(person.age - profile.age) > Number(ageRange)) return false;
+    return true;
+  };
+
+  const swipePeople = rankedPeople.filter(passesFilters);
+
+  const currentPerson = swipePeople.find((person) => {
     const search = peopleQuery.trim().toLowerCase();
 
     if (!search) return true;
@@ -325,6 +459,27 @@ export default function App() {
   });
 
   const unreadCount = notifications.filter((item) => !item.read).length;
+  const currentMatch = currentPerson ? scorePerson(profile, currentPerson) : null;
+
+  // Скрываем нижнюю панель, пока открыта клавиатура.
+  useEffect(() => {
+    const isField = (target: EventTarget | null) =>
+      target instanceof HTMLElement &&
+      (target.tagName === 'TEXTAREA' ||
+        (target.tagName === 'INPUT' && !['file', 'checkbox', 'radio'].includes((target as HTMLInputElement).type)));
+    const onIn = (event: FocusEvent) => {
+      if (isField(event.target)) setKbOpen(true);
+    };
+    const onOut = () => {
+      setTimeout(() => setKbOpen(isField(document.activeElement)), 80);
+    };
+    document.addEventListener('focusin', onIn);
+    document.addEventListener('focusout', onOut);
+    return () => {
+      document.removeEventListener('focusin', onIn);
+      document.removeEventListener('focusout', onOut);
+    };
+  }, []);
 
   useEffect(() => {
     if (!notice) return;
@@ -340,6 +495,9 @@ export default function App() {
 
     tg.ready();
     tg.expand();
+    tg.disableVerticalSwipes?.();
+    tg.setHeaderColor?.('#090a0f');
+    tg.setBackgroundColor?.('#090a0f');
 
     const telegramName = [
       tg.initDataUnsafe?.user?.first_name,
@@ -434,6 +592,7 @@ export default function App() {
             : '',
         });
 
+        setCityOther(Boolean(data.profile.city) && !CITIES.includes(data.profile.city));
         setProfileEditing(false);
       } else {
         setProfileEditing(true);
@@ -461,26 +620,43 @@ export default function App() {
 
     const handleBack = () => {
       if (notificationsOpen) setNotificationsOpen(false);
+      else if (viewPost) setViewPost(null);
+      else if (eventsOpen) setEventsOpen(false);
       else if (detail) setDetail(null);
+      else if (tab === 'create' && createStarted) setCreateStarted(false);
       else if (tab !== 'home') {
         setTab('home');
         setNotice('');
       }
     };
 
-    if (detail || notificationsOpen || tab !== 'home') tg.BackButton.show();
+    if (detail || notificationsOpen || viewPost || eventsOpen || tab !== 'home') tg.BackButton.show();
     else tg.BackButton.hide();
 
     tg.BackButton.onClick(handleBack);
 
     return () => tg.BackButton.offClick(handleBack);
-  }, [detail, notificationsOpen, tab]);
+  }, [detail, notificationsOpen, viewPost, eventsOpen, createStarted, tab]);
 
   const changeTab = (next: Tab) => {
     setTab(next);
     setNotice('');
     setDetail(null);
     setNotificationsOpen(false);
+    setEventsOpen(false);
+    setCreateStarted(false);
+  };
+
+  const startCreate = () => {
+    changeTab('create');
+    setCreateStarted(true);
+  };
+
+  const startEventInClub = (club: Club) => {
+    setEventForm((old) => ({ ...old, category: club.title === 'Игровой клуб' ? 'Игры' : club.id === 'art' ? 'Творчество' : 'Технологии' }));
+    setDetail(null);
+    setTab('create');
+    setCreateStarted(true);
   };
 
   const submitSwipe = async (
@@ -566,11 +742,13 @@ export default function App() {
 
   const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
     startX.current = event.clientX;
+    moved.current = false;
     event.currentTarget.setPointerCapture(event.pointerId);
   };
 
   const onPointerMove = (event: PointerEvent<HTMLDivElement>) => {
     if (startX.current && !swipeLock) {
+      if (Math.abs(event.clientX - startX.current) > 6) moved.current = true;
       setDragX(
         Math.max(
           -150,
@@ -581,6 +759,12 @@ export default function App() {
   };
 
   const onPointerUp = () => {
+    if (!moved.current && currentPerson && !swipeLock) {
+      startX.current = 0;
+      setDragX(0);
+      openPerson(currentPerson.uid);
+      return;
+    }
     if (dragX > 90) {
       void finishSwipe('right');
     } else if (dragX < -90) {
@@ -685,6 +869,7 @@ export default function App() {
         capacity: '12',
       });
       setEventStep(0);
+      setCreateStarted(false);
 
       await refreshData();
 
@@ -708,6 +893,10 @@ export default function App() {
     }
     if (eventStep === 2 && !eventForm.time) {
       setNotice('Выбери время встречи');
+      return;
+    }
+    if (eventStep === 3 && eventForm.date && eventForm.date < todayStr()) {
+      setNotice('Эта дата уже прошла');
       return;
     }
     if (eventStep === 3 && (!eventForm.date || !eventForm.place.trim())) {
@@ -893,6 +1082,12 @@ export default function App() {
 
   const openPerson = (uid: string) => {
     setDetail({ type: 'person', uid });
+    setPersonPosts({ uid, posts: [] });
+    if (uid.startsWith('tg_') && authStatus === 'signed-in') {
+      goGetPosts({ targetUid: uid })
+        .then((result) => setPersonPosts({ uid, posts: result.posts || [] }))
+        .catch(() => undefined);
+    }
   };
 
   const openEvent = (id: string) => {
@@ -928,8 +1123,12 @@ export default function App() {
     ? clubs.find((club) => club.id === detail.id)
     : undefined;
 
+  const clubEvents = detailClub
+    ? upcomingEvents.filter((event) => eventInClub(event, detailClub))
+    : [];
+
   return (
-    <div className="app-shell">
+    <div className={`app-shell${kbOpen ? ' kb-open' : ''}`}>
       <header className="topbar">
         <button
           className="brand"
@@ -953,7 +1152,7 @@ export default function App() {
         >
           <Bell size={19} />
           {unreadCount > 0 && (
-            <span aria-label={`${unreadCount} непрочитанных`} />
+            <span className="notif-dot" aria-label={`${unreadCount} непрочитанных`} />
           )}
         </button>
       </header>
@@ -968,137 +1167,126 @@ export default function App() {
       <main className="main-content">
         {tab === 'home' && (
           <section className="screen screen-home">
-            <section className="hero">
-              <div className="hero-copy">
-                <div className="eyebrow">
-                  <Sparkles size={14} /> ТВОЯ СРЕДА
-                </div>
+            <div className="home-greet">
+              <div className="eyebrow"><Sparkles size={14} /> {profile ? 'ТВОЯ ЛЕНТА' : 'ДОБРО ПОЖАЛОВАТЬ'}</div>
+              <h1 className="home-title">
+                {profile ? `Привет, ${profile.name.split(' ')[0]}` : 'Привет'}<span>.</span>
+              </h1>
+              <p className="muted">Люди, события и клубы по твоим интересам.</p>
+            </div>
 
-                <h1>
-                  Не сиди в<br />
-                  <span>одиночном режиме.</span>
-                </h1>
+            {authStatus === 'signed-in' && !dataLoading && !profile && (
+              <button className="onboard-card" onClick={() => changeTab('profile')}>
+                <span className="onboard-icon"><UserRound size={20} /></span>
+                <span>
+                  <b>Заполни анкету</b>
+                  <small>Так мы подберём людей и события по интересам и возрасту</small>
+                </span>
+                <ChevronRight size={18} />
+              </button>
+            )}
 
-                <p>
-                  Находи людей по интересам, собирайся на события
-                  и создавай свои движухи.
-                </p>
-
-                <button
-                  className="primary"
-                  onClick={() => changeTab('people')}
-                >
-                  Найти компанию <ArrowUpRight size={17} />
-                </button>
-              </div>
-
-              <div className="hero-orb orb-one" />
-              <div className="hero-orb orb-two" />
-
-              <div className="hero-stamp">
-                <span className="stamp-dot" />
-                YOUR PEOPLE. YOUR PLACE.
-              </div>
-            </section>
+            <div className="quick-actions">
+              <button onClick={() => changeTab('people')}><Users size={19} /><span>Найти людей</span></button>
+              <button onClick={startCreate}><Plus size={19} /><span>Создать событие</span></button>
+              <button onClick={() => changeTab('communities')}><UsersRound size={19} /><span>Клубы</span></button>
+            </div>
 
             <section className="section">
               <div className="section-heading">
                 <div>
-                  <div className="eyebrow">ВЫБИРАЙСЯ ИЗ ДОМА</div>
-                  <h2>Ближайшие встречи</h2>
+                  <div className="eyebrow">БЛИЖАЙШИЕ</div>
+                  <h2>События рядом</h2>
                 </div>
-
-                <button
-                  className="text-button"
-                  onClick={() => changeTab('communities')}
-                >
-                  Все <ArrowUpRight size={14} />
-                </button>
+                {upcomingEvents.length > 0 && (
+                  <button className="text-button" onClick={() => setEventsOpen(true)}>
+                    Все ({upcomingEvents.length}) <ArrowUpRight size={14} />
+                  </button>
+                )}
               </div>
 
-              {events.length > 0 ? (
-                <div className="event-grid">
-                  {events.slice(0, 2).map((event) => (
+              {upcomingEvents.length > 0 ? (
+                <div className="event-rail">
+                  {upcomingEvents.slice(0, 8).map((event) => (
                     <button
-                      className={`event-card event-${event.color}`}
+                      className={`event-card rail event-${event.color}`}
                       key={event.id}
                       onClick={() => openEvent(event.id)}
                     >
                       <div className="event-topline">
-                        <span className="event-category">
-                          {event.category}
+                        <span className="event-tags">
+                          <span className="event-category">{event.category}</span>
+                          {event.nearby && <span className="badge-near"><MapPin size={10} /> Рядом</span>}
                         </span>
-
-                        <span className="event-arrow">
-                          <ArrowUpRight size={17} />
-                        </span>
+                        {event.forYou ? (
+                          <span className="badge-you"><Star size={11} /> Для тебя</span>
+                        ) : (
+                          <span className="event-arrow"><ArrowUpRight size={16} /></span>
+                        )}
                       </div>
-
                       <div className="event-meta">
                         <CalendarDays size={13} />
                         {displayDate(event.date)} · {event.time}
                       </div>
-
                       <h3>{event.title}</h3>
-
                       <div className="event-bottom">
-                        <span>
-                          <MapPin size={13} /> {event.place}
-                        </span>
-                        <b>{event.participantCount}</b>
+                        <span><MapPin size={13} /> {event.place}</span>
+                        <b>{event.participantCount}/{event.capacity}</b>
+                      </div>
+                      <div className="fill-bar">
+                        <i style={{ width: `${Math.min(100, Math.round((event.participantCount / Math.max(1, event.capacity)) * 100))}%` }} />
                       </div>
                     </button>
                   ))}
                 </div>
               ) : (
-                <p className="muted">
-                  Пока нет опубликованных событий. Создай первое!
-                </p>
+                <div className="empty-card">
+                  <CalendarDays size={26} />
+                  <b>Пока нет событий</b>
+                  <span>Создай первое — другие участники увидят его здесь</span>
+                  <button className="primary" onClick={startCreate}>Создать событие</button>
+                </div>
               )}
             </section>
 
             <section className="section">
               <div className="section-heading">
                 <div>
-                  <div className="eyebrow">СОВПАДАЮТ ИНТЕРЕСЫ</div>
-                  <h2>Люди для твоей команды</h2>
+                  <div className="eyebrow">ПОДОБРАНО ДЛЯ ТЕБЯ</div>
+                  <h2>Люди для команды</h2>
                 </div>
-
-                <button
-                  className="text-button"
-                  onClick={() => changeTab('people')}
-                >
+                <button className="text-button" onClick={() => changeTab('people')}>
                   Смотреть <ArrowUpRight size={14} />
                 </button>
               </div>
 
               <div className="people-preview">
-                {(people.length > 0 ? people.slice(0, 2) : []).map((person) => (
-                  <button
-                    className="mini-person"
-                    key={person.uid}
-                    onClick={() => {
-                      setTab('people');
-                      openPerson(person.uid);
-                    }}
-                  >
-                    <span className={`mini-avatar ${person.color}`}>
-                      {person.photoUrl ? <img src={person.photoUrl} alt="" /> : person.initials}
-                    </span>
+                {rankedPeople.slice(0, 3).map((person) => {
+                  const m = scorePerson(profile, person);
+                  return (
+                    <button
+                      className="mini-person"
+                      key={person.uid}
+                      onClick={() => {
+                        setTab('people');
+                        openPerson(person.uid);
+                      }}
+                    >
+                      <span className={`mini-avatar ${person.color}`}>
+                        {person.photoUrl ? <img src={person.photoUrl} alt="" /> : person.initials}
+                      </span>
+                      <span>
+                        <b>{person.name}, {person.age}</b>
+                        <small>{matchLine(person)}</small>
+                      </span>
+                      {m.percent > 0 && <i className="match-pill">{m.percent}%</i>}
+                      <ChevronRight size={17} />
+                    </button>
+                  );
+                })}
 
-                    <span>
-                      <b>{person.name}, {person.age}</b>
-                      <small>{person.interests[0] || 'Новые знакомства'}</small>
-                    </span>
-
-                    <ChevronRight size={17} />
-                  </button>
-                ))}
-
-                {people.length === 0 && (
-                  <p className="muted">
-                    Новых анкет пока нет. Загляни позже.
-                  </p>
+                {rankedPeople.length === 0 && (
+                  <p className="muted">Новых анкет пока нет. Загляни позже.</p>
                 )}
               </div>
             </section>
@@ -1131,14 +1319,24 @@ export default function App() {
             </div>
 
             {showFilters && (
-              <div className="community-search">
-                <Search size={18} />
-                <input
-                  value={peopleQuery}
-                  onChange={(event) => setPeopleQuery(event.target.value)}
-                  placeholder="Имя, город или интерес"
-                />
-              </div>
+              <>
+                <div className="community-search">
+                  <Search size={18} />
+                  <input
+                    value={peopleQuery}
+                    onChange={(event) => setPeopleQuery(event.target.value)}
+                    placeholder="Имя, город или интерес"
+                  />
+                </div>
+                <div className="chip-row filters-row">
+                  <button className={`chip ${onlyMyCity ? 'on' : ''}`} disabled={!profile?.city} onClick={() => setOnlyMyCity((value) => !value)}>
+                    <MapPin size={12} /> Рядом: мой город
+                  </button>
+                  {([['any', 'Любой возраст'], ['1', '±1 год'], ['2', '±2 года']] as const).map(([id, label]) => (
+                    <button key={id} className={`chip ${ageRange === id ? 'on' : ''}`} onClick={() => setAgeRange(id)}>{label}</button>
+                  ))}
+                </div>
+              </>
             )}
 
             {matchedPeople.length > 0 && (
@@ -1178,8 +1376,8 @@ export default function App() {
             {currentPerson ? (
               <>
                 <div className="swipe-stage">
-                  <div className="swipe-hint hint-no">ПРОПУСК</div>
-                  <div className="swipe-hint hint-yes">ИНТЕРЕСНО</div>
+                  <div className="swipe-hint hint-no" style={{ opacity: Math.min(1, Math.max(0, -dragX / 90)) }}>ПРОПУСК</div>
+                  <div className="swipe-hint hint-yes" style={{ opacity: Math.min(1, Math.max(0, dragX / 90)) }}>ИНТЕРЕСНО</div>
 
                   <div
                     className="person-card"
@@ -1214,10 +1412,9 @@ export default function App() {
                   >
                     <div
                       className={`person-art ${currentPerson.color}`}
-                      onClick={() => openPerson(currentPerson.uid)}
                     >
                       <div className="person-art-orb" />
-                      <span className="person-number">GO / PROFILE</span>
+                      <span className="person-number">{currentMatch && currentMatch.percent > 0 ? `${currentMatch.percent}% совпадение` : 'GO / PROFILE'}</span>
 
                       {currentPerson.photoUrl ? (
                         <img className="person-photo" src={currentPerson.photoUrl} alt={currentPerson.name} draggable={false} />
@@ -1232,7 +1429,6 @@ export default function App() {
 
                     <div
                       className="person-info"
-                      onClick={() => openPerson(currentPerson.uid)}
                     >
                       <div className="person-location">
                         <MapPin size={13} /> {currentPerson.city}
@@ -1246,7 +1442,7 @@ export default function App() {
 
                       <div className="tags">
                         {currentPerson.interests.map((tag) => (
-                          <span key={tag}>{tag}</span>
+                          <span key={tag} className={currentMatch?.shared.some((s) => sameInterest(s, tag)) ? 'tag-shared' : ''}>{tag}</span>
                         ))}
                       </div>
 
@@ -1294,12 +1490,16 @@ export default function App() {
                   Новые участники появятся здесь после заполнения своих анкет.
                 </p>
 
-                {peopleQuery && (
+                {(peopleQuery || onlyMyCity || ageRange !== 'any') && (
                   <button
                     className="primary"
-                    onClick={() => setPeopleQuery('')}
+                    onClick={() => {
+                      setPeopleQuery('');
+                      setOnlyMyCity(false);
+                      setAgeRange('any');
+                    }}
                   >
-                    Сбросить поиск
+                    Сбросить фильтры
                   </button>
                 )}
               </div>
@@ -1313,85 +1513,107 @@ export default function App() {
 
         {tab === 'create' && (
           <section className="screen placeholder-page create-page">
-            <div className="eyebrow">ТВОЯ ИДЕЯ — ТВОЁ СОБЫТИЕ</div>
-            <h1 className="page-title">Создай<br /><span>движение.</span></h1>
-            <p>Заполни пять коротких шагов — данные сохранятся при переходе назад.</p>
-            <div className="wizard-heading">
-              <span>ШАГ {eventStep + 1} ИЗ 5</span>
-              <b>{['Название', 'Участники', 'Время', 'Дата и место', 'Описание'][eventStep]}</b>
-            </div>
-            <div className="wizard-progress" aria-label={`Шаг ${eventStep + 1} из 5`}>
-              {[0, 1, 2, 3, 4].map((step) => <span key={step} className={step <= eventStep ? 'filled' : ''} />)}
-            </div>
-            <div className="wizard-card" key={eventStep}>
-              {eventStep === 0 && (
-                <div className="wizard-step">
-                  <div className="wizard-step-number">01</div>
-                  <h2>Как назовём встречу?</h2>
-                  <p>Название должно коротко объяснять, что вы собираетесь делать.</p>
-                  <label>Название события
-                    <input autoFocus value={eventForm.title} onChange={(event) => setEventForm((old) => ({ ...old, title: event.target.value }))} placeholder="Например, прогулка и фото" maxLength={70} />
-                  </label>
+            {!createStarted ? (
+              <>
+                <div className="eyebrow">ТВОЯ ИДЕЯ — ТВОЁ СОБЫТИЕ</div>
+                <h1 className="page-title">Создай<br /><span>движение.</span></h1>
+                <p>Собери людей на игру, прогулку или проект. Это займёт минуту.</p>
+                <div className="create-steps">
+                  {['Название', 'Участники', 'Время', 'Дата и место', 'Описание'].map((label, index) => (
+                    <div key={label}><b>{index + 1}</b><span>{label}</span></div>
+                  ))}
                 </div>
-              )}
-              {eventStep === 1 && (
-                <div className="wizard-step">
-                  <div className="wizard-step-number">02</div>
-                  <h2>Сколько человек собираем?</h2>
-                  <p>Ты автоматически попадёшь в список участников после публикации.</p>
-                  <label>Максимум участников
-                    <input autoFocus type="number" min="2" max="200" value={eventForm.capacity} onChange={(event) => setEventForm((old) => ({ ...old, capacity: event.target.value }))} placeholder="12" />
-                  </label>
-                  <span className="wizard-hint">От 2 до 200 человек</span>
+                <button className="primary full" onClick={() => setCreateStarted(true)}>
+                  Создать событие <ArrowRight size={16} />
+                </button>
+                <p className="safety-note">Встречайтесь в общественных местах. Не публикуй домашние адреса.</p>
+              </>
+            ) : (
+              <>
+                <div className="wizard-heading">
+                  <span>ШАГ {eventStep + 1} ИЗ 5</span>
+                  <b>{['Название', 'Участники', 'Время', 'Дата и место', 'Описание'][eventStep]}</b>
                 </div>
-              )}
-              {eventStep === 2 && (
-                <div className="wizard-step">
-                  <div className="wizard-step-number">03</div>
-                  <h2>Во сколько встречаемся?</h2>
-                  <p>Выбери время начала встречи.</p>
-                  <label>Время
-                    <input autoFocus type="time" value={eventForm.time} onChange={(event) => setEventForm((old) => ({ ...old, time: event.target.value }))} />
-                  </label>
+                <div className="wizard-progress" aria-label={`Шаг ${eventStep + 1} из 5`}>
+                  {[0, 1, 2, 3, 4].map((step) => <span key={step} className={step <= eventStep ? 'filled' : ''} />)}
                 </div>
-              )}
-              {eventStep === 3 && (
-                <div className="wizard-step">
-                  <div className="wizard-step-number">04</div>
-                  <h2>Где и когда?</h2>
-                  <p>Укажи общественное место, доступное всем участникам.</p>
-                  <label>Дата
-                    <input autoFocus type="date" value={eventForm.date} onChange={(event) => setEventForm((old) => ({ ...old, date: event.target.value }))} />
-                  </label>
-                  <label>Публичное место встречи
-                    <input value={eventForm.place} onChange={(event) => setEventForm((old) => ({ ...old, place: event.target.value }))} placeholder="Например, городской парк" maxLength={100} />
-                  </label>
-                  <span className="wizard-hint">Не указывай домашний адрес или точное место проживания.</span>
+                <div className="wizard-card" key={eventStep}>
+                  {eventStep === 0 && (
+                    <div className="wizard-step">
+                      <div className="wizard-step-number">01</div>
+                      <h2>Как назовём встречу?</h2>
+                      <p>Название должно коротко объяснять, что вы собираетесь делать.</p>
+                      <label>Название события
+                        <input autoFocus value={eventForm.title} onChange={(event) => setEventForm((old) => ({ ...old, title: event.target.value }))} placeholder="Например, прогулка и фото" maxLength={70} />
+                      </label>
+                    </div>
+                  )}
+                  {eventStep === 1 && (
+                    <div className="wizard-step">
+                      <div className="wizard-step-number">02</div>
+                      <h2>Сколько человек собираем?</h2>
+                      <p>Ты автоматически попадёшь в список участников после публикации.</p>
+                      <label>Максимум участников
+                        <input inputMode="numeric" type="number" min="2" max="200" value={eventForm.capacity} onChange={(event) => setEventForm((old) => ({ ...old, capacity: event.target.value }))} placeholder="12" />
+                      </label>
+                      <span className="wizard-hint">От 2 до 200 человек</span>
+                    </div>
+                  )}
+                  {eventStep === 2 && (
+                    <div className="wizard-step">
+                      <div className="wizard-step-number">03</div>
+                      <h2>Во сколько встречаемся?</h2>
+                      <p>Выбери время начала встречи.</p>
+                      <label>Время
+                        <input type="time" value={eventForm.time} onChange={(event) => setEventForm((old) => ({ ...old, time: event.target.value }))} />
+                      </label>
+                    </div>
+                  )}
+                  {eventStep === 3 && (
+                    <div className="wizard-step">
+                      <div className="wizard-step-number">04</div>
+                      <h2>Где и когда?</h2>
+                      <p>Укажи общественное место, доступное всем участникам.</p>
+                      <label>Дата
+                        <input type="date" min={todayStr()} value={eventForm.date} onChange={(event) => setEventForm((old) => ({ ...old, date: event.target.value }))} />
+                      </label>
+                      <label>Публичное место встречи
+                        <input value={eventForm.place} onChange={(event) => setEventForm((old) => ({ ...old, place: event.target.value }))} placeholder="Например, городской парк" maxLength={100} />
+                      </label>
+                      <span className="wizard-hint">Не указывай домашний адрес. Город события берётся из твоей анкеты.</span>
+                    </div>
+                  )}
+                  {eventStep === 4 && (
+                    <div className="wizard-step">
+                      <div className="wizard-step-number">05</div>
+                      <h2>Расскажи подробности</h2>
+                      <p>Что будете делать и кому подойдёт встреча?</p>
+                      <label>Описание
+                        <textarea value={eventForm.description} onChange={(event) => setEventForm((old) => ({ ...old, description: event.target.value }))} placeholder="Расскажи немного о встрече..." rows={4} maxLength={500} />
+                      </label>
+                      <div className="chip-label">Категория — по ней событие попадёт в клуб и рекомендации</div>
+                      <div className="chip-row">
+                        {CATEGORIES.map((category) => (
+                          <button type="button" key={category} className={`chip ${eventForm.category === category ? 'on' : ''}`} onClick={() => setEventForm((old) => ({ ...old, category }))}>
+                            {category}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
-              )}
-              {eventStep === 4 && (
-                <div className="wizard-step">
-                  <div className="wizard-step-number">05</div>
-                  <h2>Расскажи подробности</h2>
-                  <p>Что будете делать и кому подойдёт встреча?</p>
-                  <label>Описание
-                    <textarea autoFocus value={eventForm.description} onChange={(event) => setEventForm((old) => ({ ...old, description: event.target.value }))} placeholder="Расскажи немного о встрече..." rows={4} maxLength={500} />
-                  </label>
-                  <label>Категория <span className="optional-label">необязательно</span>
-                    <input value={eventForm.category} onChange={(event) => setEventForm((old) => ({ ...old, category: event.target.value }))} placeholder="Встреча" maxLength={30} />
-                  </label>
+                <div className="wizard-actions">
+                  <button className="wizard-back" onClick={eventStep === 0 ? () => setCreateStarted(false) : previousEventStep}>
+                    {eventStep === 0 ? 'Отмена' : 'Назад'}
+                  </button>
+                  {eventStep < 4 ? (
+                    <button className="primary wizard-next" onClick={nextEventStep}>Далее <ArrowRight size={16} /></button>
+                  ) : (
+                    <button className="primary wizard-next" onClick={() => void createEvent()} disabled={dataLoading || photoBusy}>Опубликовать <ArrowRight size={16} /></button>
+                  )}
                 </div>
-              )}
-            </div>
-            <div className="wizard-actions">
-              {eventStep > 0 && <button className="wizard-back" onClick={previousEventStep}>Назад</button>}
-              {eventStep < 4 ? (
-                <button className="primary wizard-next" onClick={nextEventStep}>Далее <ArrowRight size={16} /></button>
-              ) : (
-                <button className="primary wizard-next" onClick={() => void createEvent()} disabled={dataLoading || photoBusy}>Опубликовать <ArrowRight size={16} /></button>
-              )}
-            </div>
-            <p className="safety-note">Встречайтесь в общественных местах. Не публикуй домашние адреса.</p>
+              </>
+            )}
           </section>
         )}
 
@@ -1400,12 +1622,12 @@ export default function App() {
             <div className="eyebrow">СВОИ ЛЮДИ</div>
 
             <h1 className="page-title">
-              Найди своё<br />
-              <span>сообщество.</span>
+              Найди свой<br />
+              <span>клуб.</span>
             </h1>
 
             <p className="muted">
-              Места, где общие интересы превращаются в реальные встречи.
+              Клубы собирают события по интересам. Вступи — и такие события появятся у тебя в «Для тебя».
             </p>
 
             <div className="community-search">
@@ -1430,12 +1652,12 @@ export default function App() {
                     onClick={() => openClub(club.id)}
                   >
                     <span className={`community-symbol ${club.icon}`}>
-                      <UsersRound size={20} />
+                      <ClubIcon id={club.icon} size={20} />
                     </span>
 
                     <span className="community-copy">
                       <b>{club.title}</b>
-                      <small>{Number(clubCounts[club.id] || 0)} участников</small>
+                      <small>{Number(clubCounts[club.id] || 0)} участников · {upcomingEvents.filter((event) => eventInClub(event, club)).length} событий{clubJoined.includes(club.id) ? ' · ты в клубе' : ''}</small>
                       <span>{club.description}</span>
                     </span>
 
@@ -1526,8 +1748,29 @@ export default function App() {
                     <input type="number" min="13" max="17" value={profileForm.age} onChange={(e) => setProfileForm((o) => ({ ...o, age: e.target.value }))} placeholder="Например, 16" />
                   </label>
                   <label>Город
-                    <input value={profileForm.city} onChange={(e) => setProfileForm((o) => ({ ...o, city: e.target.value }))} placeholder="Твой город" maxLength={60} />
+                    <select
+                      value={cityOther ? '__other' : profileForm.city}
+                      onChange={(e) => {
+                        const value = e.target.value;
+                        if (value === '__other') {
+                          setCityOther(true);
+                          setProfileForm((o) => ({ ...o, city: '' }));
+                        } else {
+                          setCityOther(false);
+                          setProfileForm((o) => ({ ...o, city: value }));
+                        }
+                      }}
+                    >
+                      <option value="">Выбери город</option>
+                      {CITIES.map((city) => <option key={city} value={city}>{city}</option>)}
+                      <option value="__other">Другой город…</option>
+                    </select>
                   </label>
+                  {cityOther && (
+                    <label>Название города
+                      <input value={profileForm.city} onChange={(e) => setProfileForm((o) => ({ ...o, city: e.target.value }))} placeholder="Например, Тарко-Сале" maxLength={60} />
+                    </label>
+                  )}
                   <label>О себе
                     <textarea value={profileForm.bio} onChange={(e) => setProfileForm((o) => ({ ...o, bio: e.target.value }))} placeholder="Расскажи, что тебе интересно..." rows={3} maxLength={300} />
                   </label>
@@ -1622,9 +1865,22 @@ export default function App() {
 
                   <div className="tags">
                     {detailPerson.interests.map((tag) => (
-                      <span key={tag}>{tag}</span>
+                      <span key={tag} className={scorePerson(profile, detailPerson).shared.some((s) => sameInterest(s, tag)) ? 'tag-shared' : ''}>{tag}</span>
                     ))}
                   </div>
+
+                  {personPosts.uid === detailPerson.uid && personPosts.posts.length > 0 && (
+                    <>
+                      <h3>Публикации</h3>
+                      <div className="ig-grid">
+                        {personPosts.posts.map((post) => (
+                          <div className="ig-tile" key={post.id}>
+                            <img src={post.photoUrl} alt={post.caption || 'Публикация'} loading="lazy" />
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
 
                   <button
                     className="primary full"
@@ -1698,45 +1954,84 @@ export default function App() {
             {detail.type === 'club' && detailClub && (
               <div className="detail-content club-detail">
                 <div className={`community-symbol big ${detailClub.icon}`}>
-                  <UsersRound size={28} />
+                  <ClubIcon id={detailClub.icon} size={28} />
                 </div>
 
-                <div className="eyebrow">СООБЩЕСТВО GO</div>
-
+                <div className="eyebrow">КЛУБ GO</div>
                 <h1>{detailClub.title}</h1>
-
-                <div className="muted">
-                  {Number(clubCounts[detailClub.id] || 0)} участников
-                </div>
-
+                <div className="muted">{Number(clubCounts[detailClub.id] || 0)} участников</div>
                 <p>{detailClub.description}</p>
 
                 <div className="club-benefits">
-                  <span>
-                    <Check size={15} /> Общение по интересам
-                  </span>
-
-                  <span>
-                    <Check size={15} /> Совместные события
-                  </span>
-
-                  <span>
-                    <Check size={15} /> Новые знакомства
-                  </span>
+                  {detailClub.perks.map((perk) => (
+                    <span key={perk}><Check size={15} /> {perk}</span>
+                  ))}
                 </div>
 
-                <button
-                  className="primary full"
-                  onClick={() => void toggleClub(detailClub.id)}
-                >
-                  {clubJoined.includes(detailClub.id)
-                    ? 'Покинуть сообщество'
-                    : 'Вступить в сообщество'}
+                <h3>События клуба</h3>
+                {clubEvents.length > 0 ? (
+                  <div className="people-preview">
+                    {clubEvents.slice(0, 4).map((event) => (
+                      <button className="mini-person" key={event.id} onClick={() => openEvent(event.id)}>
+                        <span className={`mini-avatar event-${event.color}`}><CalendarDays size={18} /></span>
+                        <span>
+                          <b>{event.title}</b>
+                          <small>{displayDate(event.date)} · {event.time} · {event.place}</small>
+                        </span>
+                        <ChevronRight size={17} />
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="muted">Пока нет событий. Создай первое для этого клуба.</p>
+                )}
 
+                <button className="primary full" onClick={() => void toggleClub(detailClub.id)}>
+                  {clubJoined.includes(detailClub.id) ? 'Покинуть клуб' : 'Вступить в клуб'}
                   <ArrowRight size={17} />
+                </button>
+                <button className="ig-btn club-create" onClick={() => startEventInClub(detailClub)}>
+                  <Plus size={15} /> Создать событие в клубе
                 </button>
               </div>
             )}
+          </section>
+        </div>
+      )}
+
+      {eventsOpen && (
+        <div className="detail-backdrop" onClick={() => setEventsOpen(false)}>
+          <section className="detail-sheet" onClick={(e) => e.stopPropagation()}>
+            <div className="detail-handle" />
+            <button className="detail-close" onClick={() => setEventsOpen(false)} aria-label="Закрыть"><X size={20} /></button>
+            <div className="detail-content">
+              <div className="eyebrow">ВСЕ СОБЫТИЯ</div>
+              <h1>Ближайшие встречи</h1>
+              <div className="chip-row">
+                {([['all', 'Все'], ['near', 'Рядом'], ['you', 'Для тебя'], ['today', 'Сегодня'], ['week', '7 дней']] as const).map(([id, label]) => (
+                  <button key={id} className={`chip ${eventFilter === id ? 'on' : ''}`} onClick={() => setEventFilter(id)}>{label}</button>
+                ))}
+              </div>
+              {filteredEvents.length > 0 ? (
+                <div className="people-preview">
+                  {filteredEvents.map((event) => (
+                    <button className="mini-person" key={event.id} onClick={() => { setEventsOpen(false); openEvent(event.id); }}>
+                      <span className={`mini-avatar event-${event.color}`}><CalendarDays size={18} /></span>
+                      <span>
+                        <b>{event.title}{event.forYou ? ' ★' : ''}</b>
+                        <small>{displayDate(event.date)} · {event.time} · {event.place} · {event.participantCount}/{event.capacity}</small>
+                      </span>
+                      <ChevronRight size={17} />
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <p className="muted">Ничего не найдено. Попробуй другой фильтр или создай своё событие.</p>
+              )}
+              <button className="primary full" onClick={() => { setEventsOpen(false); startCreate(); }}>
+                Создать событие <Plus size={16} />
+              </button>
+            </div>
           </section>
         </div>
       )}
