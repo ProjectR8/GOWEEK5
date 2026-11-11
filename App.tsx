@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type PointerEvent } from 'react';
 import {
   ArrowRight, ArrowUpRight, Bell, CalendarDays, Check,
   ChevronRight, Compass, MapPin, Plus, Search,
-  Settings, Sparkles, Users, UsersRound, UserRound,
+  Settings, Sparkles, Users, UsersRound, UserRound, Send, Music2, Dumbbell,
   X, Clock3, SlidersHorizontal, LayoutGrid, Trash2, Camera, Star, Gamepad2, Palette, Cpu
 } from 'lucide-react';
 import { firebaseConfigured, storage } from './firebase';
@@ -14,12 +14,15 @@ import {
   goCreatePhotoPost,
   goDeletePhotoPost,
   goGetData,
+  goGetLiveUpdates,
+  goCreateClub,
   goGetPosts,
   goJoinEvent,
   goMarkNotificationsRead,
   goSaveProfile,
   goSwipe,
   goToggleClub,
+  type ApiClub,
   type ApiMatch,
   type ApiNotification,
   type ApiPhotoPost,
@@ -41,6 +44,7 @@ type TelegramWebApp = {
   disableVerticalSwipes?: () => void;
   setHeaderColor?: (color: string) => void;
   setBackgroundColor?: (color: string) => void;
+  openTelegramLink?: (url: string) => void;
   BackButton: {
     show: () => void;
     hide: () => void;
@@ -68,6 +72,7 @@ type Person = {
   initials: string;
   activity: string;
   photoUrl?: string;
+  username?: string;
 };
 
 type EventItem = {
@@ -96,6 +101,8 @@ type Club = {
   icon: string;
   keywords: string[];
   perks: string[];
+  category?: string;
+  ownerUid?: string;
 };
 
 type Detail =
@@ -170,23 +177,24 @@ const CITIES = [
   'Нижневартовск', 'Новороссийск', 'Каменск-Уральский', 'Первоуральск',
 ];
 
-const CATEGORIES = ['Встреча', 'Игры', 'Творчество', 'Технологии', 'Спорт'];
+const CATEGORIES = ['Встреча', 'Игры', 'Творчество', 'Технологии', 'Спорт', 'Музыка', 'Другое'];
+const CLUB_CATEGORIES = ['Игры', 'Творчество', 'Технологии', 'Музыка', 'Спорт', 'Общение', 'Другое'];
 
 const clubs: Club[] = [
   {
-    id: 'gaming', title: 'Игровой клуб', members: '',
+    id: 'gaming', title: 'Игровой клуб', members: '', category: 'Игры',
     description: 'Для тех, кто любит настолки и видеоигры. Находи команду и ходи на игровые встречи.',
     icon: 'game', keywords: ['игр', 'настол', 'гейм', 'турнир', 'game'],
     perks: ['Все игровые события в одном месте', 'Такие события появляются у тебя в «Для тебя»', 'Можно создать игровую встречу прямо из клуба'],
   },
   {
-    id: 'art', title: 'Арт-комьюнити', members: '',
+    id: 'art', title: 'Арт-комьюнити', members: '', category: 'Творчество',
     description: 'Рисование, фото, дизайн и музыка. Для тех, кто любит создавать и делиться.',
     icon: 'art', keywords: ['твор', 'рис', 'арт', 'фото', 'дизайн', 'музык'],
     perks: ['Творческие встречи и прогулки с фото', 'Такие события появляются у тебя в «Для тебя»', 'Можно создать встречу прямо из клуба'],
   },
   {
-    id: 'tech', title: 'Технологии', members: '',
+    id: 'tech', title: 'Технологии', members: '', category: 'Технологии',
     description: 'Код, электроника и пет-проекты. Собирай команду и ходи на хакатоны.',
     icon: 'tech', keywords: ['тех', 'код', 'програм', 'хакатон', 'it', 'робот'],
     perks: ['Хакатоны и встречи для разработчиков', 'Такие события появляются у тебя в «Для тебя»', 'Можно создать встречу прямо из клуба'],
@@ -206,7 +214,18 @@ const emptyProfileForm: ProfileForm = {
 };
 
 function ClubIcon({ id, size }: { id: string; size: number }) {
-  const Icon = id === 'game' ? Gamepad2 : id === 'art' ? Palette : Cpu;
+  const Icon = id === 'game'
+    ? Gamepad2
+    : id === 'art'
+      ? Palette
+      : id === 'tech'
+        ? Cpu
+        : id === 'music'
+          ? Music2
+          : id === 'sport'
+            ? Dumbbell
+            : UsersRound;
+
   return <Icon size={size} />;
 }
 
@@ -215,52 +234,99 @@ const norm = (value: string) => value.trim().toLowerCase();
 function sameInterest(a: string, b: string) {
   const x = norm(a);
   const y = norm(b);
+
   if (!x || !y) return false;
-  return x === y || (x.length >= 4 && y.length >= 4 && (x.includes(y) || y.includes(x)));
+
+  return x === y ||
+    (x.length >= 4 && y.length >= 4 && (x.includes(y) || y.includes(x)));
 }
 
-function scorePerson(me: ApiProfile | null, p: Person) {
+function scorePerson(me: ApiProfile | null, person: Person) {
   if (!me) return { score: 0, percent: 0, shared: [] as string[] };
+
   const mine = me.interests || [];
-  const shared = p.interests.filter((tag) => mine.some((m) => sameInterest(m, tag)));
+  const shared = person.interests.filter(
+    (tag) => mine.some((interest) => sameInterest(interest, tag))
+  );
+
   let score = shared.length * 3;
-  const sameCity = Boolean(me.city && p.city && norm(me.city) === norm(p.city));
+
+  const sameCity = Boolean(
+    me.city &&
+    person.city &&
+    norm(me.city) === norm(person.city)
+  );
+
   if (sameCity) score += 3;
-  const diff = Math.abs((me.age || 0) - p.age);
-  score += diff === 0 ? 3 : diff === 1 ? 2 : diff <= 2 ? 1 : 0;
-  if (p.photoUrl) score += 1;
-  const maxScore = Math.min(5, Math.max(1, mine.length, p.interests.length)) * 3 + 7;
-  const percent = Math.max(5, Math.min(99, Math.round((score / maxScore) * 100)));
+
+  const diff = Math.abs((me.age || 0) - person.age);
+
+  score += diff === 0
+    ? 3
+    : diff === 1
+      ? 2
+      : diff <= 2
+        ? 1
+        : 0;
+
+  if (person.photoUrl) score += 1;
+
+  const maxScore =
+    Math.min(5, Math.max(1, mine.length, person.interests.length)) * 3 + 7;
+
+  const percent = Math.max(
+    5,
+    Math.min(99, Math.round((score / maxScore) * 100))
+  );
+
   return { score, percent, shared };
 }
 
 function todayStr() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const date = new Date();
+
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
 function isUpcoming(date: string) {
-  return /^\d{4}-\d{2}-\d{2}$/.test(date) ? date >= todayStr() : true;
+  return /^\d{4}-\d{2}-\d{2}$/.test(date)
+    ? date >= todayStr()
+    : true;
 }
 
 function withinDays(date: string, days: number) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
-  const diff = (new Date(`${date}T12:00:00`).getTime() - Date.now()) / 86400000;
+
+  const diff =
+    (new Date(`${date}T12:00:00`).getTime() - Date.now()) / 86400000;
+
   return diff <= days;
 }
 
 function eventInClub(event: EventItem, club: Club) {
-  const text = norm(`${event.category} ${event.title}`);
-  return club.keywords.some((word) => text.includes(word));
+  const value = norm(`${event.category} ${event.title}`);
+
+  return club.keywords.some((word) => value.includes(word));
 }
 
-function isForYou(me: ApiProfile | null, joined: string[], event: EventItem) {
-  const byClub = clubs.some((club) => joined.includes(club.id) && eventInClub(event, club));
-  const text = norm(`${event.title} ${event.category} ${event.description}`);
+function isForYou(
+  me: ApiProfile | null,
+  joined: string[],
+  event: EventItem,
+  clubList: Club[] = clubs
+) {
+  const byClub = clubList.some(
+    (club) => joined.includes(club.id) && eventInClub(event, club)
+  );
+
+  const value = norm(`${event.title} ${event.category} ${event.description}`);
+
   const byInterest = (me?.interests || []).some((tag) => {
-    const n = norm(tag);
-    return n.length >= 3 && text.includes(n);
+    const interest = norm(tag);
+
+    return interest.length >= 3 && value.includes(interest);
   });
+
   return byClub || byInterest;
 }
 
@@ -291,17 +357,62 @@ function toPerson(profile: ApiProfile): Person {
     initials: initialsFor(profile.name || ''),
     activity: 'Открыт к совместным активностям',
     photoUrl: profile.photoUrl || '',
+    username: profile.username || '',
+  };
+}
+
+function toClub(club: ApiClub): Club {
+  const category = club.category || 'Другое';
+
+  const icon = club.icon ||
+    (
+      category === 'Игры'
+        ? 'game'
+        : category === 'Творчество'
+          ? 'art'
+          : category === 'Технологии'
+            ? 'tech'
+            : category === 'Музыка'
+              ? 'music'
+              : category === 'Спорт'
+                ? 'sport'
+                : 'users'
+    );
+
+  return {
+    id: club.id,
+    title: club.title,
+    members: String(Number(club.memberCount || 0)),
+    description: club.description || 'Сообщество участников GO.',
+    icon,
+    keywords: [norm(category), norm(club.title)].filter(Boolean),
+    perks: [
+      'Общайся с участниками по интересам',
+      'Следи за событиями сообщества',
+      'Создавай совместные активности',
+    ],
+    category,
+    ownerUid: club.ownerUid || '',
   };
 }
 
 function eventColor(category: string) {
   const value = category.toLowerCase();
 
-  if (value.includes('тех') || value.includes('код') || value.includes('онлайн') || value.includes('спорт')) {
+  if (
+    value.includes('тех') ||
+    value.includes('код') ||
+    value.includes('онлайн') ||
+    value.includes('спорт')
+  ) {
     return 'orange';
   }
 
-  if (value.includes('твор') || value.includes('фото') || value.includes('арт')) {
+  if (
+    value.includes('твор') ||
+    value.includes('фото') ||
+    value.includes('арт')
+  ) {
     return 'mint';
   }
 
@@ -354,12 +465,28 @@ function errorMessage(error: unknown) {
 async function prepareImage(file: File, max = 1280): Promise<Blob> {
   const bmp = await createImageBitmap(file);
   const k = Math.min(1, max / Math.max(bmp.width, bmp.height));
-  const c = document.createElement('canvas');
-  c.width = Math.round(bmp.width * k);
-  c.height = Math.round(bmp.height * k);
-  c.getContext('2d')!.drawImage(bmp, 0, 0, c.width, c.height);
-  return new Promise((res, rej) =>
-    c.toBlob((b) => (b ? res(b) : rej(new Error('Не удалось обработать фото'))), 'image/jpeg', 0.85));
+  const canvas = document.createElement('canvas');
+
+  canvas.width = Math.round(bmp.width * k);
+  canvas.height = Math.round(bmp.height * k);
+
+  canvas.getContext('2d')!.drawImage(
+    bmp,
+    0,
+    0,
+    canvas.width,
+    canvas.height
+  );
+
+  return new Promise((resolve, reject) =>
+    canvas.toBlob(
+      (blob) => blob
+        ? resolve(blob)
+        : reject(new Error('Не удалось обработать фото')),
+      'image/jpeg',
+      0.85
+    )
+  );
 }
 
 export default function App() {
@@ -382,6 +509,16 @@ export default function App() {
   const [allPeople, setAllPeople] = useState<Person[]>([]);
   const [people, setPeople] = useState<Person[]>([]);
   const [clubCounts, setClubCounts] = useState<Record<string, number>>({});
+  const [communityClubs, setCommunityClubs] = useState<Club[]>(clubs);
+  const [registeredUserCount, setRegisteredUserCount] = useState(0);
+  const [initialLoaded, setInitialLoaded] = useState(false);
+  const [clubCreateOpen, setClubCreateOpen] = useState(false);
+  const [clubCreating, setClubCreating] = useState(false);
+  const [clubForm, setClubForm] = useState({
+    title: '',
+    description: '',
+    category: 'Общение',
+  });
   const [photoPosts, setPhotoPosts] = useState<ApiPhotoPost[]>([]);
   const [eventStep, setEventStep] = useState(0);
   const [photoBusy, setPhotoBusy] = useState(false);
@@ -396,7 +533,14 @@ export default function App() {
   const [onlyMyCity, setOnlyMyCity] = useState(false);
   const [cityOther, setCityOther] = useState(false);
   const [ageRange, setAgeRange] = useState<'any' | '1' | '2'>('any');
-  const [personPosts, setPersonPosts] = useState<{ uid: string; posts: ApiPhotoPost[] }>({ uid: '', posts: [] });
+  const [personPosts, setPersonPosts] = useState<{
+    uid: string;
+    posts: ApiPhotoPost[];
+  }>({
+    uid: '',
+    posts: [],
+  });
+
   const [eventForm, setEventForm] = useState({
     title: '',
     description: '',
@@ -413,14 +557,18 @@ export default function App() {
   const postInputRef = useRef<HTMLInputElement>(null);
 
   const rankedPeople = [...people]
-    .map((person) => ({ person, score: scorePerson(profile, person).score }))
-    .sort((x, y) => y.score - x.score)
+    .map((person) => ({
+      person,
+      score: scorePerson(profile, person).score,
+    }))
+    .sort((a, b) => b.score - a.score)
     .map((item) => item.person);
 
   const matchLine = (person: Person) => {
-    const m = scorePerson(profile, person);
-    return m.shared.length
-      ? `Общее: ${m.shared.slice(0, 2).join(', ')}`
+    const match = scorePerson(profile, person);
+
+    return match.shared.length
+      ? `Общее: ${match.shared.slice(0, 2).join(', ')}`
       : person.interests[0] || 'Новые знакомства';
   };
 
@@ -428,22 +576,48 @@ export default function App() {
     .filter((event) => isUpcoming(event.date))
     .map((event) => ({
       ...event,
-      forYou: isForYou(profile, clubJoined, event),
-      nearby: Boolean(profile?.city && event.city && norm(profile.city) === norm(event.city)),
+      forYou: isForYou(profile, clubJoined, event, communityClubs),
+      nearby: Boolean(
+        profile?.city &&
+        event.city &&
+        norm(profile.city) === norm(event.city)
+      ),
     }))
-    .sort((x, y) => Number(Boolean(y.nearby)) - Number(Boolean(x.nearby)) || `${x.date}${x.time}`.localeCompare(`${y.date}${y.time}`));
+    .sort(
+      (a, b) =>
+        Number(Boolean(b.nearby)) - Number(Boolean(a.nearby)) ||
+        `${a.date}${a.time}`.localeCompare(`${b.date}${b.time}`)
+    );
 
   const filteredEvents = upcomingEvents.filter((event) =>
-    eventFilter === 'all' ? true
-      : eventFilter === 'you' ? Boolean(event.forYou)
-      : eventFilter === 'near' ? Boolean(event.nearby)
-      : eventFilter === 'today' ? event.date === todayStr()
-      : withinDays(event.date, 7)
+    eventFilter === 'all'
+      ? true
+      : eventFilter === 'you'
+        ? Boolean(event.forYou)
+        : eventFilter === 'near'
+          ? Boolean(event.nearby)
+          : eventFilter === 'today'
+            ? event.date === todayStr()
+            : withinDays(event.date, 7)
   );
 
   const passesFilters = (person: Person) => {
-    if (onlyMyCity && profile?.city && norm(person.city) !== norm(profile.city)) return false;
-    if (ageRange !== 'any' && profile && Math.abs(person.age - profile.age) > Number(ageRange)) return false;
+    if (
+      onlyMyCity &&
+      profile?.city &&
+      norm(person.city) !== norm(profile.city)
+    ) {
+      return false;
+    }
+
+    if (
+      ageRange !== 'any' &&
+      profile &&
+      Math.abs(person.age - profile.age) > Number(ageRange)
+    ) {
+      return false;
+    }
+
     return true;
   };
 
@@ -454,27 +628,51 @@ export default function App() {
 
     if (!search) return true;
 
-    return [person.name, person.city, person.bio, ...person.interests]
-      .some((value) => value.toLowerCase().includes(search));
+    return [
+      person.name,
+      person.city,
+      person.bio,
+      ...person.interests,
+    ].some((value) => value.toLowerCase().includes(search));
   });
 
-  const unreadCount = notifications.filter((item) => !item.read).length;
-  const currentMatch = currentPerson ? scorePerson(profile, currentPerson) : null;
+  const unreadCount = notifications.filter(
+    (item) => !item.read
+  ).length;
+
+  const currentMatch = currentPerson
+    ? scorePerson(profile, currentPerson)
+    : null;
 
   // Скрываем нижнюю панель, пока открыта клавиатура.
   useEffect(() => {
     const isField = (target: EventTarget | null) =>
       target instanceof HTMLElement &&
-      (target.tagName === 'TEXTAREA' ||
-        (target.tagName === 'INPUT' && !['file', 'checkbox', 'radio'].includes((target as HTMLInputElement).type)));
+      (
+        target.tagName === 'TEXTAREA' ||
+        (
+          target.tagName === 'INPUT' &&
+          !['file', 'checkbox', 'radio'].includes(
+            (target as HTMLInputElement).type
+          )
+        )
+      );
+
     const onIn = (event: FocusEvent) => {
-      if (isField(event.target)) setKbOpen(true);
+      if (isField(event.target)) {
+        setKbOpen(true);
+      }
     };
+
     const onOut = () => {
-      setTimeout(() => setKbOpen(isField(document.activeElement)), 80);
+      setTimeout(() => {
+        setKbOpen(isField(document.activeElement));
+      }, 80);
     };
+
     document.addEventListener('focusin', onIn);
     document.addEventListener('focusout', onOut);
+
     return () => {
       document.removeEventListener('focusin', onIn);
       document.removeEventListener('focusout', onOut);
@@ -483,8 +681,10 @@ export default function App() {
 
   useEffect(() => {
     if (!notice) return;
-    const t = setTimeout(() => setNotice(''), 4000);
-    return () => clearTimeout(t);
+
+    const timer = setTimeout(() => setNotice(''), 4000);
+
+    return () => clearTimeout(timer);
   }, [notice]);
 
   // Telegram Mini App setup.
@@ -502,11 +702,16 @@ export default function App() {
     const telegramName = [
       tg.initDataUnsafe?.user?.first_name,
       tg.initDataUnsafe?.user?.last_name,
-    ].filter(Boolean).join(' ').trim();
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .trim();
 
     if (telegramName) {
       setProfileForm((old) =>
-        old.name ? old : { ...old, name: telegramName }
+        old.name
+          ? old
+          : { ...old, name: telegramName }
       );
     }
   }, []);
@@ -573,13 +778,21 @@ export default function App() {
       );
 
       setEvents(
-        data.events.map(toEvent).sort((x, y) => `${x.date}${x.time}`.localeCompare(`${y.date}${y.time}`))
+        data.events
+          .map(toEvent)
+          .sort((a, b) =>
+            `${a.date}${a.time}`.localeCompare(`${b.date}${b.time}`)
+          )
       );
+
       setMatches(data.matches || []);
       setNotifications(data.notifications || []);
       setClubJoined(data.clubMemberships || []);
       setClubCounts(data.clubCounts || {});
       setPhotoPosts(data.photoPosts || []);
+      setCommunityClubs((data.clubs || []).map(toClub));
+      setRegisteredUserCount(Number(data.totalUsers || 0));
+      setInitialLoaded(true);
 
       if (data.profile) {
         setProfileForm({
@@ -592,7 +805,11 @@ export default function App() {
             : '',
         });
 
-        setCityOther(Boolean(data.profile.city) && !CITIES.includes(data.profile.city));
+        setCityOther(
+          Boolean(data.profile.city) &&
+          !CITIES.includes(data.profile.city)
+        );
+
         setProfileEditing(false);
       } else {
         setProfileEditing(true);
@@ -609,29 +826,130 @@ export default function App() {
     if (authStatus === 'signed-in') {
       void refreshData();
     }
+
     // refreshData intentionally runs only when auth status changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authStatus]);
 
+  // Актуализируем мэтчи, анкеты, сообщества и счётчики раз в пять секунд.
+  useEffect(() => {
+    if (authStatus !== 'signed-in' || !initialLoaded) return;
+
+    let stopped = false;
+    let inFlight = false;
+
+    const pullLiveData = async () => {
+      if (
+        stopped ||
+        inFlight ||
+        document.visibilityState === 'hidden'
+      ) {
+        return;
+      }
+
+      inFlight = true;
+
+      try {
+        const data = await goGetLiveUpdates();
+
+        if (stopped) return;
+
+        const publicPeople = (data.people || []).map(toPerson);
+        const swiped = data.swipedUids || [];
+
+        setAllPeople(publicPeople);
+
+        setPeople(
+          publicPeople.filter(
+            (person) => !swiped.includes(person.uid)
+          )
+        );
+
+        setEvents(
+          (data.events || [])
+            .map(toEvent)
+            .sort((a, b) =>
+              `${a.date}${a.time}`.localeCompare(`${b.date}${b.time}`)
+            )
+        );
+
+        setMatches(data.matches || []);
+        setNotifications(data.notifications || []);
+        setClubJoined(data.clubMemberships || []);
+        setClubCounts(data.clubCounts || {});
+        setCommunityClubs((data.clubs || []).map(toClub));
+        setRegisteredUserCount(Number(data.totalUsers || 0));
+      } catch (error) {
+        console.warn('GO live refresh failed:', error);
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        void pullLiveData();
+      }
+    };
+
+    void pullLiveData();
+
+    const timer = window.setInterval(
+      () => void pullLiveData(),
+      5000
+    );
+
+    document.addEventListener(
+      'visibilitychange',
+      onVisibilityChange
+    );
+
+    return () => {
+      stopped = true;
+
+      window.clearInterval(timer);
+
+      document.removeEventListener(
+        'visibilitychange',
+        onVisibilityChange
+      );
+    };
+  }, [authStatus, initialLoaded]);
+
   // Telegram back button.
   useEffect(() => {
     const tg = window.Telegram?.WebApp;
+
     if (!tg) return;
 
     const handleBack = () => {
-      if (notificationsOpen) setNotificationsOpen(false);
-      else if (viewPost) setViewPost(null);
-      else if (eventsOpen) setEventsOpen(false);
-      else if (detail) setDetail(null);
-      else if (tab === 'create' && createStarted) setCreateStarted(false);
-      else if (tab !== 'home') {
+      if (notificationsOpen) {
+        setNotificationsOpen(false);
+      } else if (viewPost) {
+        setViewPost(null);
+      } else if (eventsOpen) {
+        setEventsOpen(false);
+      } else if (detail) {
+        setDetail(null);
+      } else if (tab === 'create' && createStarted) {
+        setCreateStarted(false);
+      } else if (tab !== 'home') {
         setTab('home');
         setNotice('');
       }
     };
 
-    if (detail || notificationsOpen || viewPost || eventsOpen || tab !== 'home') tg.BackButton.show();
-    else tg.BackButton.hide();
+    if (
+      detail ||
+      notificationsOpen ||
+      viewPost ||
+      eventsOpen ||
+      tab !== 'home'
+    ) {
+      tg.BackButton.show();
+    } else {
+      tg.BackButton.hide();
+    }
 
     tg.BackButton.onClick(handleBack);
 
@@ -653,7 +971,15 @@ export default function App() {
   };
 
   const startEventInClub = (club: Club) => {
-    setEventForm((old) => ({ ...old, category: club.title === 'Игровой клуб' ? 'Игры' : club.id === 'art' ? 'Творчество' : 'Технологии' }));
+    const category = CATEGORIES.includes(club.category || '')
+      ? (club.category as string)
+      : 'Встреча';
+
+    setEventForm((old) => ({
+      ...old,
+      category,
+    }));
+
     setDetail(null);
     setTab('create');
     setCreateStarted(true);
@@ -732,6 +1058,7 @@ export default function App() {
     if (swipeDirection || swipeLock || !currentPerson) return;
 
     setSwipeDirection(direction);
+
     try {
       await submitSwipe(currentPerson, direction);
     } finally {
@@ -743,12 +1070,16 @@ export default function App() {
   const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
     startX.current = event.clientX;
     moved.current = false;
+
     event.currentTarget.setPointerCapture(event.pointerId);
   };
 
   const onPointerMove = (event: PointerEvent<HTMLDivElement>) => {
     if (startX.current && !swipeLock) {
-      if (Math.abs(event.clientX - startX.current) > 6) moved.current = true;
+      if (Math.abs(event.clientX - startX.current) > 6) {
+        moved.current = true;
+      }
+
       setDragX(
         Math.max(
           -150,
@@ -756,15 +1087,14 @@ export default function App() {
         )
       );
     }
-  };
-
-  const onPointerUp = () => {
+  };  const onPointerUp = () => {
     if (!moved.current && currentPerson && !swipeLock) {
       startX.current = 0;
       setDragX(0);
       openPerson(currentPerson.uid);
       return;
     }
+
     if (dragX > 90) {
       void finishSwipe('right');
     } else if (dragX < -90) {
@@ -868,6 +1198,7 @@ export default function App() {
         place: '',
         capacity: '12',
       });
+
       setEventStep(0);
       setCreateStarted(false);
 
@@ -887,26 +1218,46 @@ export default function App() {
       setNotice('Сначала придумай название события');
       return;
     }
-    if (eventStep === 1 && (!Number.isInteger(Number(eventForm.capacity)) || Number(eventForm.capacity) < 2 || Number(eventForm.capacity) > 200)) {
+
+    if (
+      eventStep === 1 &&
+      (
+        !Number.isInteger(Number(eventForm.capacity)) ||
+        Number(eventForm.capacity) < 2 ||
+        Number(eventForm.capacity) > 200
+      )
+    ) {
       setNotice('Укажи от 2 до 200 участников');
       return;
     }
+
     if (eventStep === 2 && !eventForm.time) {
       setNotice('Выбери время встречи');
       return;
     }
-    if (eventStep === 3 && eventForm.date && eventForm.date < todayStr()) {
+
+    if (
+      eventStep === 3 &&
+      eventForm.date &&
+      eventForm.date < todayStr()
+    ) {
       setNotice('Эта дата уже прошла');
       return;
     }
-    if (eventStep === 3 && (!eventForm.date || !eventForm.place.trim())) {
+
+    if (
+      eventStep === 3 &&
+      (!eventForm.date || !eventForm.place.trim())
+    ) {
       setNotice('Укажи дату и публичное место встречи');
       return;
     }
+
     setEventStep((step) => Math.min(4, step + 1));
   };
 
-  const previousEventStep = () => setEventStep((step) => Math.max(0, step - 1));
+  const previousEventStep = () =>
+    setEventStep((step) => Math.max(0, step - 1));
 
   const toggleClub = async (clubId: string) => {
     if (!firebaseConfigured || authStatus !== 'signed-in') {
@@ -924,7 +1275,11 @@ export default function App() {
           ? [...new Set([...old, clubId])]
           : old.filter((id) => id !== clubId)
       );
-      setClubCounts((old) => ({ ...old, [clubId]: result.count }));
+
+      setClubCounts((old) => ({
+        ...old,
+        [clubId]: result.count,
+      }));
 
       setNotice(
         result.joined
@@ -935,6 +1290,59 @@ export default function App() {
       setNotice(
         `Не удалось изменить участие: ${errorMessage(error)}`
       );
+    }
+  };
+
+  const createClub = async () => {
+    const title = clubForm.title.trim();
+    const description = clubForm.description.trim();
+
+    if (
+      title.length < 3 ||
+      !description ||
+      description.length < 10
+    ) {
+      setNotice(
+        'Укажи название от 3 символов и описание от 10 символов'
+      );
+      return;
+    }
+
+    if (authStatus !== 'signed-in' || !profile) {
+      setNotice(
+        'Сначала войди через Telegram и создай анкету'
+      );
+      return;
+    }
+
+    setClubCreating(true);
+
+    try {
+      await goCreateClub({
+        title,
+        description,
+        category: clubForm.category,
+      });
+
+      setClubForm({
+        title: '',
+        description: '',
+        category: 'Общение',
+      });
+
+      setClubCreateOpen(false);
+
+      await refreshData();
+
+      setNotice(
+        'Сообщество создано. Ты автоматически вступил в него.'
+      );
+    } catch (error) {
+      setNotice(
+        `Не удалось создать сообщество: ${errorMessage(error)}`
+      );
+    } finally {
+      setClubCreating(false);
     }
   };
 
@@ -984,16 +1392,30 @@ export default function App() {
 
   const uploadAvatar = async (file: File | undefined) => {
     if (!file) return;
+
     if (!profile || !storage || authStatus !== 'signed-in') {
       setNotice('Сначала сохрани анкету и войди через Telegram');
       return;
     }
+
     setPhotoBusy(true);
+
     try {
       const blob = await prepareImage(file);
-      const imageRef = storageRef(storage, `profilePhotos/${profile.uid}/avatar/${Date.now()}.jpg`);
-      const uploaded = await uploadBytes(imageRef, blob, { contentType: 'image/jpeg' });
+
+      const imageRef = storageRef(
+        storage,
+        `profilePhotos/${profile.uid}/avatar/${Date.now()}.jpg`
+      );
+
+      const uploaded = await uploadBytes(
+        imageRef,
+        blob,
+        { contentType: 'image/jpeg' }
+      );
+
       const photoUrl = await getDownloadURL(uploaded.ref);
+
       await goSaveProfile({
         name: profile.name,
         age: profile.age,
@@ -1002,51 +1424,93 @@ export default function App() {
         interests: profile.interests || [],
         photoUrl,
       });
+
       await refreshData();
+
       setNotice('Фото профиля обновлено');
     } catch (error) {
-      setNotice(`Не удалось загрузить фото: ${errorMessage(error)}`);
+      setNotice(
+        `Не удалось загрузить фото: ${errorMessage(error)}`
+      );
     } finally {
       setPhotoBusy(false);
-      if (avatarInputRef.current) avatarInputRef.current.value = '';
+
+      if (avatarInputRef.current) {
+        avatarInputRef.current.value = '';
+      }
     }
   };
 
   const createPhotoPost = async (file: File | undefined) => {
     if (!file) return;
+
     if (!profile || !storage || authStatus !== 'signed-in') {
       setNotice('Сначала создай и сохрани анкету');
       return;
     }
+
     setPhotoBusy(true);
+
     try {
       const blob = await prepareImage(file);
-      const imageRef = storageRef(storage, `profilePhotos/${profile.uid}/posts/${Date.now()}.jpg`);
-      const uploaded = await uploadBytes(imageRef, blob, { contentType: 'image/jpeg' });
+
+      const imageRef = storageRef(
+        storage,
+        `profilePhotos/${profile.uid}/posts/${Date.now()}.jpg`
+      );
+
+      const uploaded = await uploadBytes(
+        imageRef,
+        blob,
+        { contentType: 'image/jpeg' }
+      );
+
       const photoUrl = await getDownloadURL(uploaded.ref);
-      await goCreatePhotoPost({ photoUrl, caption: '' });
+
+      await goCreatePhotoPost({
+        photoUrl,
+        caption: '',
+      });
+
       await refreshData();
+
       setNotice('Фото опубликовано в профиле');
     } catch (error) {
-      setNotice(`Не удалось опубликовать фото: ${errorMessage(error)}`);
+      setNotice(
+        `Не удалось опубликовать фото: ${errorMessage(error)}`
+      );
     } finally {
       setPhotoBusy(false);
-      if (postInputRef.current) postInputRef.current.value = '';
+
+      if (postInputRef.current) {
+        postInputRef.current.value = '';
+      }
     }
   };
 
   const deletePost = async (post: ApiPhotoPost) => {
     if (!window.confirm('Удалить публикацию?')) return;
+
     try {
       await goDeletePhotoPost({ postId: post.id });
+
       if (storage) {
-        try { await deleteObject(storageRef(storage, post.photoUrl)); } catch { /* файл мог уже удалиться */ }
+        try {
+          await deleteObject(storageRef(storage, post.photoUrl));
+        } catch {
+          // Файл мог уже удалиться.
+        }
       }
+
       setViewPost(null);
+
       await refreshData();
+
       setNotice('Публикация удалена');
     } catch (error) {
-      setNotice(`Не удалось удалить: ${errorMessage(error)}`);
+      setNotice(
+        `Не удалось удалить: ${errorMessage(error)}`
+      );
     }
   };
 
@@ -1057,7 +1521,10 @@ export default function App() {
       .filter((item) => !item.read)
       .map((item) => item.id);
 
-    if (unreadIds.length === 0 || authStatus !== 'signed-in') {
+    if (
+      unreadIds.length === 0 ||
+      authStatus !== 'signed-in'
+    ) {
       return;
     }
 
@@ -1081,25 +1548,65 @@ export default function App() {
   };
 
   const openPerson = (uid: string) => {
-    setDetail({ type: 'person', uid });
-    setPersonPosts({ uid, posts: [] });
+    setDetail({
+      type: 'person',
+      uid,
+    });
+
+    setPersonPosts({
+      uid,
+      posts: [],
+    });
+
     if (uid.startsWith('tg_') && authStatus === 'signed-in') {
       goGetPosts({ targetUid: uid })
-        .then((result) => setPersonPosts({ uid, posts: result.posts || [] }))
+        .then((result) => {
+          setPersonPosts({
+            uid,
+            posts: result.posts || [],
+          });
+        })
         .catch(() => undefined);
     }
   };
 
   const openEvent = (id: string) => {
-    setDetail({ type: 'event', id });
+    setDetail({
+      type: 'event',
+      id,
+    });
   };
 
   const openClub = (id: string) => {
-    setDetail({ type: 'club', id });
+    setDetail({
+      type: 'club',
+      id,
+    });
+  };
+
+  const openTelegramChat = (username: string) => {
+    const clean = username.trim().replace(/^@/, '');
+
+    if (!clean) return;
+
+    const url = `https://t.me/${encodeURIComponent(clean)}`;
+    const tg = window.Telegram?.WebApp;
+
+    if (tg?.openTelegramLink) {
+      tg.openTelegramLink(url);
+    } else {
+      window.open(url, '_blank', 'noopener,noreferrer');
+    }
   };
 
   const matchedPeople = matches
     .map((match) => {
+      // Сервер уже передал профиль напрямую из документа мэтча.
+      if (match.profile) {
+        return toPerson(match.profile);
+      }
+
+      // Резервный вариант для старых записей.
       const otherUid = match.memberUids.find(
         (uid) => uid !== profile?.uid
       );
@@ -1108,7 +1615,9 @@ export default function App() {
         ? allPeople.find((person) => person.uid === otherUid)
         : undefined;
     })
-    .filter((person): person is Person => Boolean(person));
+    .filter(
+      (person): person is Person => Boolean(person)
+    );
 
   const detailPerson = detail?.type === 'person'
     ? allPeople.find((person) => person.uid === detail.uid) ||
@@ -1120,11 +1629,13 @@ export default function App() {
     : undefined;
 
   const detailClub = detail?.type === 'club'
-    ? clubs.find((club) => club.id === detail.id)
+    ? communityClubs.find((club) => club.id === detail.id)
     : undefined;
 
   const clubEvents = detailClub
-    ? upcomingEvents.filter((event) => eventInClub(event, detailClub))
+    ? upcomingEvents.filter(
+        (event) => eventInClub(event, detailClub)
+      )
     : [];
 
   return (
@@ -1151,8 +1662,12 @@ export default function App() {
           onClick={() => void openNotifications()}
         >
           <Bell size={19} />
+
           {unreadCount > 0 && (
-            <span className="notif-dot" aria-label={`${unreadCount} непрочитанных`} />
+            <span
+              className="notif-dot"
+              aria-label={`${unreadCount} непрочитанных`}
+            />
           )}
         </button>
       </header>
@@ -1168,28 +1683,57 @@ export default function App() {
         {tab === 'home' && (
           <section className="screen screen-home">
             <div className="home-greet">
-              <div className="eyebrow"><Sparkles size={14} /> {profile ? 'ТВОЯ ЛЕНТА' : 'ДОБРО ПОЖАЛОВАТЬ'}</div>
+              <div className="eyebrow">
+                <Sparkles size={14} /> {profile ? 'ТВОЯ ЛЕНТА' : 'ДОБРО ПОЖАЛОВАТЬ'}
+              </div>
+
               <h1 className="home-title">
-                {profile ? `Привет, ${profile.name.split(' ')[0]}` : 'Привет'}<span>.</span>
+                {profile
+                  ? `Привет, ${profile.name.split(' ')[0]}`
+                  : 'Привет'}
+                <span>.</span>
               </h1>
-              <p className="muted">Люди, события и клубы по твоим интересам.</p>
+
+              <p className="muted">
+                Люди, события и клубы по твоим интересам.
+              </p>
             </div>
 
             {authStatus === 'signed-in' && !dataLoading && !profile && (
-              <button className="onboard-card" onClick={() => changeTab('profile')}>
-                <span className="onboard-icon"><UserRound size={20} /></span>
+              <button
+                className="onboard-card"
+                onClick={() => changeTab('profile')}
+              >
+                <span className="onboard-icon">
+                  <UserRound size={20} />
+                </span>
+
                 <span>
                   <b>Заполни анкету</b>
-                  <small>Так мы подберём людей и события по интересам и возрасту</small>
+                  <small>
+                    Так мы подберём людей и события по интересам и возрасту
+                  </small>
                 </span>
+
                 <ChevronRight size={18} />
               </button>
             )}
 
             <div className="quick-actions">
-              <button onClick={() => changeTab('people')}><Users size={19} /><span>Найти людей</span></button>
-              <button onClick={startCreate}><Plus size={19} /><span>Создать событие</span></button>
-              <button onClick={() => changeTab('communities')}><UsersRound size={19} /><span>Клубы</span></button>
+              <button onClick={() => changeTab('people')}>
+                <Users size={19} />
+                <span>Найти людей</span>
+              </button>
+
+              <button onClick={startCreate}>
+                <Plus size={19} />
+                <span>Создать событие</span>
+              </button>
+
+              <button onClick={() => changeTab('communities')}>
+                <UsersRound size={19} />
+                <span>Клубы</span>
+              </button>
             </div>
 
             <section className="section">
@@ -1198,9 +1742,14 @@ export default function App() {
                   <div className="eyebrow">БЛИЖАЙШИЕ</div>
                   <h2>События рядом</h2>
                 </div>
+
                 {upcomingEvents.length > 0 && (
-                  <button className="text-button" onClick={() => setEventsOpen(true)}>
-                    Все ({upcomingEvents.length}) <ArrowUpRight size={14} />
+                  <button
+                    className="text-button"
+                    onClick={() => setEventsOpen(true)}
+                  >
+                    Все ({upcomingEvents.length})
+                    <ArrowUpRight size={14} />
                   </button>
                 )}
               </div>
@@ -1215,26 +1764,60 @@ export default function App() {
                     >
                       <div className="event-topline">
                         <span className="event-tags">
-                          <span className="event-category">{event.category}</span>
-                          {event.nearby && <span className="badge-near"><MapPin size={10} /> Рядом</span>}
+                          <span className="event-category">
+                            {event.category}
+                          </span>
+
+                          {event.nearby && (
+                            <span className="badge-near">
+                              <MapPin size={10} />
+                              Рядом
+                            </span>
+                          )}
                         </span>
+
                         {event.forYou ? (
-                          <span className="badge-you"><Star size={11} /> Для тебя</span>
+                          <span className="badge-you">
+                            <Star size={11} />
+                            Для тебя
+                          </span>
                         ) : (
-                          <span className="event-arrow"><ArrowUpRight size={16} /></span>
+                          <span className="event-arrow">
+                            <ArrowUpRight size={16} />
+                          </span>
                         )}
                       </div>
+
                       <div className="event-meta">
                         <CalendarDays size={13} />
                         {displayDate(event.date)} · {event.time}
                       </div>
+
                       <h3>{event.title}</h3>
+
                       <div className="event-bottom">
-                        <span><MapPin size={13} /> {event.place}</span>
-                        <b>{event.participantCount}/{event.capacity}</b>
+                        <span>
+                          <MapPin size={13} />
+                          {event.place}
+                        </span>
+
+                        <b>
+                          {event.participantCount}/{event.capacity}
+                        </b>
                       </div>
+
                       <div className="fill-bar">
-                        <i style={{ width: `${Math.min(100, Math.round((event.participantCount / Math.max(1, event.capacity)) * 100))}%` }} />
+                        <i
+                          style={{
+                            width: `${Math.min(
+                              100,
+                              Math.round(
+                                (event.participantCount /
+                                  Math.max(1, event.capacity)) * 100
+                              )
+                            )}%`,
+                          }}
+                        />
                       </div>
                     </button>
                   ))}
@@ -1243,8 +1826,12 @@ export default function App() {
                 <div className="empty-card">
                   <CalendarDays size={26} />
                   <b>Пока нет событий</b>
-                  <span>Создай первое — другие участники увидят его здесь</span>
-                  <button className="primary" onClick={startCreate}>Создать событие</button>
+                  <span>
+                    Создай первое — другие участники увидят его здесь
+                  </span>
+                  <button className="primary" onClick={startCreate}>
+                    Создать событие
+                  </button>
                 </div>
               )}
             </section>
@@ -1255,14 +1842,20 @@ export default function App() {
                   <div className="eyebrow">ПОДОБРАНО ДЛЯ ТЕБЯ</div>
                   <h2>Люди для команды</h2>
                 </div>
-                <button className="text-button" onClick={() => changeTab('people')}>
-                  Смотреть <ArrowUpRight size={14} />
+
+                <button
+                  className="text-button"
+                  onClick={() => changeTab('people')}
+                >
+                  Смотреть
+                  <ArrowUpRight size={14} />
                 </button>
               </div>
 
               <div className="people-preview">
                 {rankedPeople.slice(0, 3).map((person) => {
-                  const m = scorePerson(profile, person);
+                  const match = scorePerson(profile, person);
+
                   return (
                     <button
                       className="mini-person"
@@ -1273,20 +1866,33 @@ export default function App() {
                       }}
                     >
                       <span className={`mini-avatar ${person.color}`}>
-                        {person.photoUrl ? <img src={person.photoUrl} alt="" /> : person.initials}
+                        {person.photoUrl ? (
+                          <img src={person.photoUrl} alt="" />
+                        ) : (
+                          person.initials
+                        )}
                       </span>
+
                       <span>
                         <b>{person.name}, {person.age}</b>
                         <small>{matchLine(person)}</small>
                       </span>
-                      {m.percent > 0 && <i className="match-pill">{m.percent}%</i>}
+
+                      {match.percent > 0 && (
+                        <i className="match-pill">
+                          {match.percent}%
+                        </i>
+                      )}
+
                       <ChevronRight size={17} />
                     </button>
                   );
                 })}
 
                 {rankedPeople.length === 0 && (
-                  <p className="muted">Новых анкет пока нет. Загляни позже.</p>
+                  <p className="muted">
+                    Новых анкет пока нет. Загляни позже.
+                  </p>
                 )}
               </div>
             </section>
@@ -1295,7 +1901,9 @@ export default function App() {
 
         {tab === 'people' && (
           <section className="screen people-page">
-            <div className="eyebrow">СОВПАДЕНИЕ ПО ИНТЕРЕСАМ</div>
+            <div className="eyebrow">
+              СОВПАДЕНИЕ ПО ИНТЕРЕСАМ
+            </div>
 
             <div className="title-row">
               <div>
@@ -1322,18 +1930,36 @@ export default function App() {
               <>
                 <div className="community-search">
                   <Search size={18} />
+
                   <input
                     value={peopleQuery}
                     onChange={(event) => setPeopleQuery(event.target.value)}
                     placeholder="Имя, город или интерес"
                   />
                 </div>
+
                 <div className="chip-row filters-row">
-                  <button className={`chip ${onlyMyCity ? 'on' : ''}`} disabled={!profile?.city} onClick={() => setOnlyMyCity((value) => !value)}>
-                    <MapPin size={12} /> Рядом: мой город
+                  <button
+                    className={`chip ${onlyMyCity ? 'on' : ''}`}
+                    disabled={!profile?.city}
+                    onClick={() => setOnlyMyCity((value) => !value)}
+                  >
+                    <MapPin size={12} />
+                    Рядом: мой город
                   </button>
-                  {([['any', 'Любой возраст'], ['1', '±1 год'], ['2', '±2 года']] as const).map(([id, label]) => (
-                    <button key={id} className={`chip ${ageRange === id ? 'on' : ''}`} onClick={() => setAgeRange(id)}>{label}</button>
+
+                  {([
+                    ['any', 'Любой возраст'],
+                    ['1', '±1 год'],
+                    ['2', '±2 года'],
+                  ] as const).map(([id, label]) => (
+                    <button
+                      key={id}
+                      className={`chip ${ageRange === id ? 'on' : ''}`}
+                      onClick={() => setAgeRange(id)}
+                    >
+                      {label}
+                    </button>
                   ))}
                 </div>
               </>
@@ -1343,31 +1969,60 @@ export default function App() {
               <section className="section">
                 <div className="section-heading">
                   <div>
-                    <div className="eyebrow">ВЗАИМНЫЙ ИНТЕРЕС</div>
+                    <div className="eyebrow">
+                      ВЗАИМНЫЙ ИНТЕРЕС
+                    </div>
                     <h2>Совпадения</h2>
                   </div>
                 </div>
 
                 <div className="people-preview">
                   {matchedPeople.map((person) => (
-                    <button
-                      className="mini-person"
+                    <div
+                      className="mini-person match-person"
                       key={person.uid}
-                      onClick={() => openPerson(person.uid)}
                     >
-                      <span className={`mini-avatar ${person.color}`}>
-                        {person.photoUrl ? <img src={person.photoUrl} alt="" /> : person.initials}
+                      <span
+                        className={`mini-avatar ${person.color}`}
+                        onClick={() => openPerson(person.uid)}
+                        role="button"
+                        tabIndex={0}
+                      >
+                        {person.photoUrl ? (
+                          <img src={person.photoUrl} alt="" />
+                        ) : (
+                          person.initials
+                        )}
                       </span>
 
-                      <span>
+                      <span
+                        className="match-person-info"
+                        onClick={() => openPerson(person.uid)}
+                        role="button"
+                        tabIndex={0}
+                      >
                         <b>{person.name}, {person.age}</b>
                         <small>
-                          Взаимный интерес · общие активности
+                          {person.username
+                            ? `@${person.username}`
+                            : 'Telegram username не указан или скрыт'}
                         </small>
                       </span>
 
-                      <Check size={17} />
-                    </button>
+                      {person.username ? (
+                        <button
+                          className="ig-btn ig-btn-accent match-message"
+                          type="button"
+                          onClick={() => openTelegramChat(person.username || '')}
+                          aria-label={`Написать ${person.name}`}
+                        >
+                          <Send size={15} />
+                          Написать
+                        </button>
+                      ) : (
+                        <Check size={17} />
+                      )}
+                    </div>
                   ))}
                 </div>
               </section>
@@ -1376,8 +2031,29 @@ export default function App() {
             {currentPerson ? (
               <>
                 <div className="swipe-stage">
-                  <div className="swipe-hint hint-no" style={{ opacity: Math.min(1, Math.max(0, -dragX / 90)) }}>ПРОПУСК</div>
-                  <div className="swipe-hint hint-yes" style={{ opacity: Math.min(1, Math.max(0, dragX / 90)) }}>ИНТЕРЕСНО</div>
+                  <div
+                    className="swipe-hint hint-no"
+                    style={{
+                      opacity: Math.min(
+                        1,
+                        Math.max(0, -dragX / 90)
+                      ),
+                    }}
+                  >
+                    ПРОПУСК
+                  </div>
+
+                  <div
+                    className="swipe-hint hint-yes"
+                    style={{
+                      opacity: Math.min(
+                        1,
+                        Math.max(0, dragX / 90)
+                      ),
+                    }}
+                  >
+                    ИНТЕРЕСНО
+                  </div>
 
                   <div
                     className="person-card"
@@ -1410,28 +2086,38 @@ export default function App() {
                           : 'none',
                     }}
                   >
-                    <div
-                      className={`person-art ${currentPerson.color}`}
-                    >
+                    <div className={`person-art ${currentPerson.color}`}>
                       <div className="person-art-orb" />
-                      <span className="person-number">{currentMatch && currentMatch.percent > 0 ? `${currentMatch.percent}% совпадение` : 'GO / PROFILE'}</span>
+
+                      <span className="person-number">
+                        {currentMatch && currentMatch.percent > 0
+                          ? `${currentMatch.percent}% совпадение`
+                          : 'GO / PROFILE'}
+                      </span>
 
                       {currentPerson.photoUrl ? (
-                        <img className="person-photo" src={currentPerson.photoUrl} alt={currentPerson.name} draggable={false} />
+                        <img
+                          className="person-photo"
+                          src={currentPerson.photoUrl}
+                          alt={currentPerson.name}
+                          draggable={false}
+                        />
                       ) : (
-                        <div className="person-avatar">{currentPerson.initials}</div>
+                        <div className="person-avatar">
+                          {currentPerson.initials}
+                        </div>
                       )}
 
                       <span className="online-pill">
-                        <i /> В поиске компании
+                        <i />
+                        В поиске компании
                       </span>
                     </div>
 
-                    <div
-                      className="person-info"
-                    >
+                    <div className="person-info">
                       <div className="person-location">
-                        <MapPin size={13} /> {currentPerson.city}
+                        <MapPin size={13} />
+                        {currentPerson.city}
                       </div>
 
                       <h2>
@@ -1442,12 +2128,24 @@ export default function App() {
 
                       <div className="tags">
                         {currentPerson.interests.map((tag) => (
-                          <span key={tag} className={currentMatch?.shared.some((s) => sameInterest(s, tag)) ? 'tag-shared' : ''}>{tag}</span>
+                          <span
+                            key={tag}
+                            className={
+                              currentMatch?.shared.some(
+                                (shared) => sameInterest(shared, tag)
+                              )
+                                ? 'tag-shared'
+                                : ''
+                            }
+                          >
+                            {tag}
+                          </span>
                         ))}
                       </div>
 
                       <button className="profile-open" type="button">
-                        Открыть анкету <ArrowUpRight size={15} />
+                        Открыть анкету
+                        <ArrowUpRight size={15} />
                       </button>
                     </div>
                   </div>
@@ -1515,86 +2213,255 @@ export default function App() {
           <section className="screen placeholder-page create-page">
             {!createStarted ? (
               <>
-                <div className="eyebrow">ТВОЯ ИДЕЯ — ТВОЁ СОБЫТИЕ</div>
-                <h1 className="page-title">Создай<br /><span>движение.</span></h1>
-                <p>Собери людей на игру, прогулку или проект. Это займёт минуту.</p>
+                <div className="eyebrow">
+                  ТВОЯ ИДЕЯ — ТВОЁ СОБЫТИЕ
+                </div>
+
+                <h1 className="page-title">
+                  Создай<br />
+                  <span>движение.</span>
+                </h1>
+
+                <p>
+                  Собери людей на игру, прогулку или проект. Это займёт минуту.
+                </p>
+
                 <div className="create-steps">
-                  {['Название', 'Участники', 'Время', 'Дата и место', 'Описание'].map((label, index) => (
-                    <div key={label}><b>{index + 1}</b><span>{label}</span></div>
+                  {[
+                    'Название',
+                    'Участники',
+                    'Время',
+                    'Дата и место',
+                    'Описание',
+                  ].map((label, index) => (
+                    <div key={label}>
+                      <b>{index + 1}</b>
+                      <span>{label}</span>
+                    </div>
                   ))}
                 </div>
-                <button className="primary full" onClick={() => setCreateStarted(true)}>
-                  Создать событие <ArrowRight size={16} />
+
+                <button
+                  className="primary full"
+                  onClick={() => setCreateStarted(true)}
+                >
+                  Создать событие
+                  <ArrowRight size={16} />
                 </button>
-                <p className="safety-note">Встречайтесь в общественных местах. Не публикуй домашние адреса.</p>
+
+                <p className="safety-note">
+                  Встречайтесь в общественных местах. Не публикуй домашние адреса.
+                </p>
               </>
             ) : (
               <>
                 <div className="wizard-heading">
-                  <span>ШАГ {eventStep + 1} ИЗ 5</span>
-                  <b>{['Название', 'Участники', 'Время', 'Дата и место', 'Описание'][eventStep]}</b>
+                  <span>ШАГ {eventStep + 1} ИЗ 5</span>                  <b>
+                    {[
+                      'Название',
+                      'Участники',
+                      'Время',
+                      'Дата и место',
+                      'Описание',
+                    ][eventStep]}
+                  </b>
                 </div>
-                <div className="wizard-progress" aria-label={`Шаг ${eventStep + 1} из 5`}>
-                  {[0, 1, 2, 3, 4].map((step) => <span key={step} className={step <= eventStep ? 'filled' : ''} />)}
+
+                <div
+                  className="wizard-progress"
+                  aria-label={`Шаг ${eventStep + 1} из 5`}
+                >
+                  {[0, 1, 2, 3, 4].map((step) => (
+                    <span
+                      key={step}
+                      className={step <= eventStep ? 'filled' : ''}
+                    />
+                  ))}
                 </div>
+
                 <div className="wizard-card" key={eventStep}>
                   {eventStep === 0 && (
                     <div className="wizard-step">
                       <div className="wizard-step-number">01</div>
+
                       <h2>Как назовём встречу?</h2>
-                      <p>Название должно коротко объяснять, что вы собираетесь делать.</p>
-                      <label>Название события
-                        <input autoFocus value={eventForm.title} onChange={(event) => setEventForm((old) => ({ ...old, title: event.target.value }))} placeholder="Например, прогулка и фото" maxLength={70} />
+
+                      <p>
+                        Название должно коротко объяснять,
+                        что вы собираетесь делать.
+                      </p>
+
+                      <label>
+                        Название события
+                        <input
+                          autoFocus
+                          value={eventForm.title}
+                          onChange={(event) =>
+                            setEventForm((old) => ({
+                              ...old,
+                              title: event.target.value,
+                            }))
+                          }
+                          placeholder="Например, прогулка и фото"
+                          maxLength={70}
+                        />
                       </label>
                     </div>
                   )}
+
                   {eventStep === 1 && (
                     <div className="wizard-step">
                       <div className="wizard-step-number">02</div>
+
                       <h2>Сколько человек собираем?</h2>
-                      <p>Ты автоматически попадёшь в список участников после публикации.</p>
-                      <label>Максимум участников
-                        <input inputMode="numeric" type="number" min="2" max="200" value={eventForm.capacity} onChange={(event) => setEventForm((old) => ({ ...old, capacity: event.target.value }))} placeholder="12" />
+
+                      <p>
+                        Ты автоматически попадёшь в список участников после публикации.
+                      </p>
+
+                      <label>
+                        Максимум участников
+                        <input
+                          inputMode="numeric"
+                          type="number"
+                          min="2"
+                          max="200"
+                          value={eventForm.capacity}
+                          onChange={(event) =>
+                            setEventForm((old) => ({
+                              ...old,
+                              capacity: event.target.value,
+                            }))
+                          }
+                          placeholder="12"
+                        />
                       </label>
-                      <span className="wizard-hint">От 2 до 200 человек</span>
+
+                      <span className="wizard-hint">
+                        От 2 до 200 человек
+                      </span>
                     </div>
                   )}
+
                   {eventStep === 2 && (
                     <div className="wizard-step">
                       <div className="wizard-step-number">03</div>
+
                       <h2>Во сколько встречаемся?</h2>
-                      <p>Выбери время начала встречи.</p>
-                      <label>Время
-                        <input type="time" value={eventForm.time} onChange={(event) => setEventForm((old) => ({ ...old, time: event.target.value }))} />
+
+                      <p>
+                        Выбери время начала встречи.
+                      </p>
+
+                      <label>
+                        Время
+                        <input
+                          type="time"
+                          value={eventForm.time}
+                          onChange={(event) =>
+                            setEventForm((old) => ({
+                              ...old,
+                              time: event.target.value,
+                            }))
+                          }
+                        />
                       </label>
                     </div>
                   )}
+
                   {eventStep === 3 && (
                     <div className="wizard-step">
                       <div className="wizard-step-number">04</div>
+
                       <h2>Где и когда?</h2>
-                      <p>Укажи общественное место, доступное всем участникам.</p>
-                      <label>Дата
-                        <input type="date" min={todayStr()} value={eventForm.date} onChange={(event) => setEventForm((old) => ({ ...old, date: event.target.value }))} />
+
+                      <p>
+                        Укажи общественное место, доступное всем участникам.
+                      </p>
+
+                      <label>
+                        Дата
+                        <input
+                          type="date"
+                          min={todayStr()}
+                          value={eventForm.date}
+                          onChange={(event) =>
+                            setEventForm((old) => ({
+                              ...old,
+                              date: event.target.value,
+                            }))
+                          }
+                        />
                       </label>
-                      <label>Публичное место встречи
-                        <input value={eventForm.place} onChange={(event) => setEventForm((old) => ({ ...old, place: event.target.value }))} placeholder="Например, городской парк" maxLength={100} />
+
+                      <label>
+                        Публичное место встречи
+                        <input
+                          value={eventForm.place}
+                          onChange={(event) =>
+                            setEventForm((old) => ({
+                              ...old,
+                              place: event.target.value,
+                            }))
+                          }
+                          placeholder="Например, городской парк"
+                          maxLength={100}
+                        />
                       </label>
-                      <span className="wizard-hint">Не указывай домашний адрес. Город события берётся из твоей анкеты.</span>
+
+                      <span className="wizard-hint">
+                        Не указывай домашний адрес. Город события берётся из твоей анкеты.
+                      </span>
                     </div>
                   )}
+
                   {eventStep === 4 && (
                     <div className="wizard-step">
                       <div className="wizard-step-number">05</div>
+
                       <h2>Расскажи подробности</h2>
-                      <p>Что будете делать и кому подойдёт встреча?</p>
-                      <label>Описание
-                        <textarea value={eventForm.description} onChange={(event) => setEventForm((old) => ({ ...old, description: event.target.value }))} placeholder="Расскажи немного о встрече..." rows={4} maxLength={500} />
+
+                      <p>
+                        Что будете делать и кому подойдёт встреча?
+                      </p>
+
+                      <label>
+                        Описание
+                        <textarea
+                          value={eventForm.description}
+                          onChange={(event) =>
+                            setEventForm((old) => ({
+                              ...old,
+                              description: event.target.value,
+                            }))
+                          }
+                          placeholder="Расскажи немного о встрече..."
+                          rows={4}
+                          maxLength={500}
+                        />
                       </label>
-                      <div className="chip-label">Категория — по ней событие попадёт в клуб и рекомендации</div>
+
+                      <div className="chip-label">
+                        Категория — по ней событие попадёт в клуб и рекомендации
+                      </div>
+
                       <div className="chip-row">
                         {CATEGORIES.map((category) => (
-                          <button type="button" key={category} className={`chip ${eventForm.category === category ? 'on' : ''}`} onClick={() => setEventForm((old) => ({ ...old, category }))}>
+                          <button
+                            type="button"
+                            key={category}
+                            className={
+                              `chip ${
+                                eventForm.category === category ? 'on' : ''
+                              }`
+                            }
+                            onClick={() =>
+                              setEventForm((old) => ({
+                                ...old,
+                                category,
+                              }))
+                            }
+                          >
                             {category}
                           </button>
                         ))}
@@ -1602,14 +2469,36 @@ export default function App() {
                     </div>
                   )}
                 </div>
+
                 <div className="wizard-actions">
-                  <button className="wizard-back" onClick={eventStep === 0 ? () => setCreateStarted(false) : previousEventStep}>
+                  <button
+                    className="wizard-back"
+                    onClick={
+                      eventStep === 0
+                        ? () => setCreateStarted(false)
+                        : previousEventStep
+                    }
+                  >
                     {eventStep === 0 ? 'Отмена' : 'Назад'}
                   </button>
+
                   {eventStep < 4 ? (
-                    <button className="primary wizard-next" onClick={nextEventStep}>Далее <ArrowRight size={16} /></button>
+                    <button
+                      className="primary wizard-next"
+                      onClick={nextEventStep}
+                    >
+                      Далее
+                      <ArrowRight size={16} />
+                    </button>
                   ) : (
-                    <button className="primary wizard-next" onClick={() => void createEvent()} disabled={dataLoading || photoBusy}>Опубликовать <ArrowRight size={16} /></button>
+                    <button
+                      className="primary wizard-next"
+                      onClick={() => void createEvent()}
+                      disabled={dataLoading || photoBusy}
+                    >
+                      Опубликовать
+                      <ArrowRight size={16} />
+                    </button>
                   )}
                 </div>
               </>
@@ -1627,7 +2516,12 @@ export default function App() {
             </h1>
 
             <p className="muted">
-              Клубы собирают события по интересам. Вступи — и такие события появятся у тебя в «Для тебя».
+              Клубы собирают людей по интересам.
+              Вступай в сообщества или создавай свои.
+            </p>
+
+            <p className="muted">
+              В GO уже {registeredUserCount} участников.
             </p>
 
             <div className="community-search">
@@ -1640,10 +2534,86 @@ export default function App() {
               />
             </div>
 
+            <button
+              className="primary full community-add-button"
+              onClick={() => setClubCreateOpen((open) => !open)}
+            >
+              <Plus size={16} />
+              {clubCreateOpen
+                ? 'Скрыть форму'
+                : 'Создать сообщество'}
+            </button>
+
+            {clubCreateOpen && (
+              <div className="form-preview community-create-form">
+                <label>
+                  Название сообщества
+                  <input
+                    value={clubForm.title}
+                    onChange={(event) =>
+                      setClubForm((old) => ({
+                        ...old,
+                        title: event.target.value,
+                      }))
+                    }
+                    placeholder="Например, любители кино"
+                    maxLength={40}
+                  />
+                </label>
+
+                <label>
+                  Категория
+                  <select
+                    value={clubForm.category}
+                    onChange={(event) =>
+                      setClubForm((old) => ({
+                        ...old,
+                        category: event.target.value,
+                      }))
+                    }
+                  >
+                    {CLUB_CATEGORIES.map((category) => (
+                      <option key={category} value={category}>
+                        {category}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label>
+                  Описание
+                  <textarea
+                    value={clubForm.description}
+                    onChange={(event) =>
+                      setClubForm((old) => ({
+                        ...old,
+                        description: event.target.value,
+                      }))
+                    }
+                    placeholder="Чем занимается сообщество и кого вы ищете?"
+                    rows={3}
+                    maxLength={300}
+                  />
+                </label>
+
+                <button
+                  className="primary full"
+                  onClick={() => void createClub()}
+                  disabled={clubCreating}
+                >
+                  {clubCreating
+                    ? 'Создаём…'
+                    : 'Опубликовать сообщество'}
+                  <Plus size={16} />
+                </button>
+              </div>
+            )}
+
             <div className="community-list">
-              {clubs
+              {communityClubs
                 .filter((club) =>
-                  club.title.toLowerCase().includes(query.toLowerCase())
+                  club.title.toLowerCase().includes(query.toLowerCase()) ||
+                  club.description.toLowerCase().includes(query.toLowerCase())
                 )
                 .map((club) => (
                   <button
@@ -1657,7 +2627,20 @@ export default function App() {
 
                     <span className="community-copy">
                       <b>{club.title}</b>
-                      <small>{Number(clubCounts[club.id] || 0)} участников · {upcomingEvents.filter((event) => eventInClub(event, club)).length} событий{clubJoined.includes(club.id) ? ' · ты в клубе' : ''}</small>
+
+                      <small>
+                        {Number(clubCounts[club.id] || 0)} участников
+                        {' · '}
+                        {
+                          upcomingEvents.filter(
+                            (event) => eventInClub(event, club)
+                          ).length
+                        } событий
+                        {clubJoined.includes(club.id)
+                          ? ' · ты в клубе'
+                          : ''}
+                      </small>
+
                       <span>{club.description}</span>
                     </span>
 
@@ -1665,10 +2648,13 @@ export default function App() {
                   </button>
                 ))}
 
-              {clubs.filter((club) =>
-                club.title.toLowerCase().includes(query.toLowerCase())
+              {communityClubs.filter((club) =>
+                club.title.toLowerCase().includes(query.toLowerCase()) ||
+                club.description.toLowerCase().includes(query.toLowerCase())
               ).length === 0 && (
-                <p className="muted">Сообщества не найдены.</p>
+                <p className="muted">
+                  Сообщества не найдены.
+                </p>
               )}
             </div>
           </section>
@@ -1676,109 +2662,317 @@ export default function App() {
 
         {tab === 'profile' && (
           <section className="screen ig-profile">
-            <input ref={avatarInputRef} className="visually-hidden-input" type="file" accept="image/*" onChange={(e) => void uploadAvatar(e.target.files?.[0])} />
-            <input ref={postInputRef} className="visually-hidden-input" type="file" accept="image/*" onChange={(e) => void createPhotoPost(e.target.files?.[0])} />
+            <input
+              ref={avatarInputRef}
+              className="visually-hidden-input"
+              type="file"
+              accept="image/*"
+              onChange={(event) =>
+                void uploadAvatar(event.target.files?.[0])
+              }
+            />
+
+            <input
+              ref={postInputRef}
+              className="visually-hidden-input"
+              type="file"
+              accept="image/*"
+              onChange={(event) =>
+                void createPhotoPost(event.target.files?.[0])
+              }
+            />
 
             {profile && !profileEditing ? (
               <>
                 <div className="ig-head">
-                  <button className="ig-avatar-ring" onClick={() => avatarInputRef.current?.click()} disabled={photoBusy} aria-label="Сменить фото профиля">
+                  <button
+                    className="ig-avatar-ring"
+                    onClick={() => avatarInputRef.current?.click()}
+                    disabled={photoBusy}
+                    aria-label="Сменить фото профиля"
+                  >
                     <span className="ig-avatar">
-                      {profile.photoUrl ? <img src={profile.photoUrl} alt="" /> : initialsFor(profile.name)}
+                      {profile.photoUrl ? (
+                        <img src={profile.photoUrl} alt="" />
+                      ) : (
+                        initialsFor(profile.name)
+                      )}
                     </span>
-                    <span className="ig-avatar-plus"><Camera size={13} /></span>
+
+                    <span className="ig-avatar-plus">
+                      <Camera size={13} />
+                    </span>
                   </button>
+
                   <div className="ig-stats">
-                    <div><b>{photoPosts.length}</b><span>публикации</span></div>
-                    <div><b>{matches.length}</b><span>совпадения</span></div>
-                    <div><b>{events.filter((e) => e.joined).length}</b><span>события</span></div>
+                    <div>
+                      <b>{photoPosts.length}</b>
+                      <span>публикации</span>
+                    </div>
+
+                    <div>
+                      <b>{matches.length}</b>
+                      <span>совпадения</span>
+                    </div>
+
+                    <div>
+                      <b>{events.filter((event) => event.joined).length}</b>
+                      <span>события</span>
+                    </div>
                   </div>
                 </div>
 
                 <div className="ig-bio">
-                  <h1>{profile.name}, {profile.age}</h1>
-                  {profile.city && <div className="ig-city"><MapPin size={13} /> {profile.city}</div>}
-                  <p>{profile.bio || 'Добавь пару слов о себе.'}</p>
+                  <h1>
+                    {profile.name}, {profile.age}
+                  </h1>
+
+                  {profile.city && (
+                    <div className="ig-city">
+                      <MapPin size={13} />
+                      {profile.city}
+                    </div>
+                  )}
+
+                  <p>
+                    {profile.bio || 'Добавь пару слов о себе.'}
+                  </p>
+
                   {(profile.interests || []).length > 0 && (
-                    <div className="tags">{profile.interests.map((t) => <span key={t}>{t}</span>)}</div>
+                    <div className="tags">
+                      {profile.interests.map((interest) => (
+                        <span key={interest}>
+                          {interest}
+                        </span>
+                      ))}
+                    </div>
                   )}
                 </div>
 
                 <div className="ig-actions">
-                  <button className="ig-btn" onClick={() => setProfileEditing(true)}><Settings size={15} /> Изменить анкету</button>
-                  <button className="ig-btn ig-btn-accent" onClick={() => postInputRef.current?.click()} disabled={photoBusy}>
-                    <Plus size={15} /> {photoBusy ? 'Загрузка…' : 'Фото'}
+                  <button
+                    className="ig-btn"
+                    onClick={() => setProfileEditing(true)}
+                  >
+                    <Settings size={15} />
+                    Изменить анкету
+                  </button>
+
+                  <button
+                    className="ig-btn ig-btn-accent"
+                    onClick={() => postInputRef.current?.click()}
+                    disabled={photoBusy}
+                  >
+                    <Plus size={15} />
+                    {photoBusy ? 'Загрузка…' : 'Фото'}
                   </button>
                 </div>
 
-                <div className="ig-tab"><LayoutGrid size={20} /></div>
+                <div className="ig-tab">
+                  <LayoutGrid size={20} />
+                </div>
 
                 {photoPosts.length > 0 || photoBusy ? (
                   <div className="ig-grid">
-                    {photoBusy && <div className="ig-tile ig-tile-loading">…</div>}
+                    {photoBusy && (
+                      <div className="ig-tile ig-tile-loading">
+                        …
+                      </div>
+                    )}
+
                     {photoPosts.map((post) => (
-                      <button className="ig-tile" key={post.id} onClick={() => setViewPost(post)}>
-                        <img src={post.photoUrl} alt={post.caption || 'Публикация'} loading="lazy" />
+                      <button
+                        className="ig-tile"
+                        key={post.id}
+                        onClick={() => setViewPost(post)}
+                      >
+                        <img
+                          src={post.photoUrl}
+                          alt={post.caption || 'Публикация'}
+                          loading="lazy"
+                        />
                       </button>
                     ))}
                   </div>
                 ) : (
                   <div className="ig-empty">
-                    <div className="ig-empty-icon"><Camera size={26} /></div>
+                    <div className="ig-empty-icon">
+                      <Camera size={26} />
+                    </div>
+
                     <b>Пока нет публикаций</b>
-                    <span>Поделись первым фото — оно появится здесь</span>
-                    <button className="primary" onClick={() => postInputRef.current?.click()}>Опубликовать фото</button>
+
+                    <span>
+                      Поделись первым фото — оно появится здесь
+                    </span>
+
+                    <button
+                      className="primary"
+                      onClick={() => postInputRef.current?.click()}
+                    >
+                      Опубликовать фото
+                    </button>
                   </div>
                 )}
               </>
             ) : (
               <>
                 <div className="eyebrow">ТВОЯ АНКЕТА</div>
-                <h1 className="page-title">{profile ? 'Изменить' : 'Расскажи'}<br /><span>о себе.</span></h1>
+
+                <h1 className="page-title">
+                  {profile ? 'Изменить' : 'Расскажи'}<br />
+                  <span>о себе.</span>
+                </h1>
+
                 <div className="form-preview">
                   {profile && (
-                    <button type="button" className="avatar-upload-button" onClick={() => avatarInputRef.current?.click()} disabled={photoBusy}>
-                      <Camera size={17} /> {photoBusy ? 'Загружаем фото...' : 'Изменить фото профиля'}
+                    <button
+                      type="button"
+                      className="avatar-upload-button"
+                      onClick={() => avatarInputRef.current?.click()}
+                      disabled={photoBusy}
+                    >
+                      <Camera size={17} />
+                      {photoBusy
+                        ? 'Загружаем фото...'
+                        : 'Изменить фото профиля'}
                     </button>
                   )}
-                  <label>Имя
-                    <input value={profileForm.name} onChange={(e) => setProfileForm((o) => ({ ...o, name: e.target.value }))} placeholder="Как тебя зовут?" maxLength={40} />
+
+                  <label>
+                    Имя
+                    <input
+                      value={profileForm.name}
+                      onChange={(event) =>
+                        setProfileForm((old) => ({
+                          ...old,
+                          name: event.target.value,
+                        }))
+                      }
+                      placeholder="Как тебя зовут?"
+                      maxLength={40}
+                    />
                   </label>
-                  <label>Возраст (13–17)
-                    <input type="number" min="13" max="17" value={profileForm.age} onChange={(e) => setProfileForm((o) => ({ ...o, age: e.target.value }))} placeholder="Например, 16" />
+
+                  <label>
+                    Возраст (13–17)
+                    <input
+                      type="number"
+                      min="13"
+                      max="17"
+                      value={profileForm.age}
+                      onChange={(event) =>
+                        setProfileForm((old) => ({
+                          ...old,
+                          age: event.target.value,
+                        }))
+                      }
+                      placeholder="Например, 16"
+                    />
                   </label>
-                  <label>Город
+
+                  <label>
+                    Город
                     <select
                       value={cityOther ? '__other' : profileForm.city}
-                      onChange={(e) => {
-                        const value = e.target.value;
+                      onChange={(event) => {
+                        const value = event.target.value;
+
                         if (value === '__other') {
                           setCityOther(true);
-                          setProfileForm((o) => ({ ...o, city: '' }));
+
+                          setProfileForm((old) => ({
+                            ...old,
+                            city: '',
+                          }));
                         } else {
                           setCityOther(false);
-                          setProfileForm((o) => ({ ...o, city: value }));
+
+                          setProfileForm((old) => ({
+                            ...old,
+                            city: value,
+                          }));
                         }
                       }}
                     >
                       <option value="">Выбери город</option>
-                      {CITIES.map((city) => <option key={city} value={city}>{city}</option>)}
-                      <option value="__other">Другой город…</option>
+
+                      {CITIES.map((city) => (
+                        <option key={city} value={city}>
+                          {city}
+                        </option>
+                      ))}
+
+                      <option value="__other">
+                        Другой город…
+                      </option>
                     </select>
                   </label>
+
                   {cityOther && (
-                    <label>Название города
-                      <input value={profileForm.city} onChange={(e) => setProfileForm((o) => ({ ...o, city: e.target.value }))} placeholder="Например, Тарко-Сале" maxLength={60} />
+                    <label>
+                      Название города
+                      <input
+                        value={profileForm.city}
+                        onChange={(event) =>
+                          setProfileForm((old) => ({
+                            ...old,
+                            city: event.target.value,
+                          }))
+                        }
+                        placeholder="Например, Тарко-Сале"
+                        maxLength={60}
+                      />
                     </label>
                   )}
-                  <label>О себе
-                    <textarea value={profileForm.bio} onChange={(e) => setProfileForm((o) => ({ ...o, bio: e.target.value }))} placeholder="Расскажи, что тебе интересно..." rows={3} maxLength={300} />
+
+                  <label>
+                    О себе
+                    <textarea
+                      value={profileForm.bio}
+                      onChange={(event) =>
+                        setProfileForm((old) => ({
+                          ...old,
+                          bio: event.target.value,
+                        }))
+                      }
+                      placeholder="Расскажи, что тебе интересно..."
+                      rows={3}
+                      maxLength={300}
+                    />
                   </label>
-                  <label>Интересы через запятую
-                    <input value={profileForm.interests} onChange={(e) => setProfileForm((o) => ({ ...o, interests: e.target.value }))} placeholder="Музыка, игры, прогулки" />
+
+                  <label>
+                    Интересы через запятую
+                    <input
+                      value={profileForm.interests}
+                      onChange={(event) =>
+                        setProfileForm((old) => ({
+                          ...old,
+                          interests: event.target.value,
+                        }))
+                      }
+                      placeholder="Музыка, игры, прогулки"
+                    />
                   </label>
-                  <button className="primary" onClick={() => void saveProfile()} disabled={photoBusy}>Сохранить <Check size={16} /></button>
-                  {profile && <button className="text-button" onClick={() => setProfileEditing(false)}>Отмена</button>}
+
+                  <button
+                    className="primary"
+                    onClick={() => void saveProfile()}
+                    disabled={photoBusy}
+                  >
+                    Сохранить
+                    <Check size={16} />
+                  </button>
+
+                  {profile && (
+                    <button
+                      className="text-button"
+                      onClick={() => setProfileEditing(false)}
+                    >
+                      Отмена
+                    </button>
+                  )}
                 </div>
               </>
             )}
@@ -1791,7 +2985,9 @@ export default function App() {
           className="toast"
           onClick={() => setNotice('')}
         >
-          <Check size={16} /> {notice} <X size={15} />
+          <Check size={16} />
+          {notice}
+          <X size={15} />
         </button>
       )}
 
@@ -1838,25 +3034,35 @@ export default function App() {
               <>
                 <div className={`detail-person-art ${detailPerson.color}`}>
                   {detailPerson.photoUrl ? (
-                    <img className="person-detail-photo" src={detailPerson.photoUrl} alt={detailPerson.name} />
+                    <img
+                      className="person-detail-photo"
+                      src={detailPerson.photoUrl}
+                      alt={detailPerson.name}
+                    />
                   ) : (
-                    <div className="person-avatar large">{detailPerson.initials}</div>
+                    <div className="person-avatar large">
+                      {detailPerson.initials}
+                    </div>
                   )}
 
                   <span className="online-pill">
-                    <i /> {detailPerson.activity}
+                    <i />
+                    {detailPerson.activity}
                   </span>
                 </div>
 
                 <div className="detail-content">
-                  <div className="eyebrow">АНКЕТА УЧАСТНИКА</div>
+                  <div className="eyebrow">
+                    АНКЕТА УЧАСТНИКА
+                  </div>
 
                   <h1>
                     {detailPerson.name}, {detailPerson.age}
                   </h1>
 
                   <div className="person-location">
-                    <MapPin size={14} /> {detailPerson.city}
+                    <MapPin size={14} />
+                    {detailPerson.city}
                   </div>
 
                   <p>{detailPerson.bio}</p>
@@ -1865,22 +3071,39 @@ export default function App() {
 
                   <div className="tags">
                     {detailPerson.interests.map((tag) => (
-                      <span key={tag} className={scorePerson(profile, detailPerson).shared.some((s) => sameInterest(s, tag)) ? 'tag-shared' : ''}>{tag}</span>
+                      <span
+                        key={tag}
+                        className={
+                          scorePerson(profile, detailPerson).shared.some(
+                            (shared) => sameInterest(shared, tag)
+                          )
+                            ? 'tag-shared'
+                            : ''
+                        }
+                      >
+                        {tag}
+                      </span>
                     ))}
                   </div>
 
-                  {personPosts.uid === detailPerson.uid && personPosts.posts.length > 0 && (
-                    <>
-                      <h3>Публикации</h3>
-                      <div className="ig-grid">
-                        {personPosts.posts.map((post) => (
-                          <div className="ig-tile" key={post.id}>
-                            <img src={post.photoUrl} alt={post.caption || 'Публикация'} loading="lazy" />
-                          </div>
-                        ))}
-                      </div>
-                    </>
-                  )}
+                  {personPosts.uid === detailPerson.uid &&
+                    personPosts.posts.length > 0 && (
+                      <>
+                        <h3>Публикации</h3>
+
+                        <div className="ig-grid">
+                          {personPosts.posts.map((post) => (
+                            <div className="ig-tile" key={post.id}>
+                              <img
+                                src={post.photoUrl}
+                                alt={post.caption || 'Публикация'}
+                                loading="lazy"
+                              />
+                            </div>
+                          ))}
+                        </div>
+                      </>
+                    )}
 
                   <button
                     className="primary full"
@@ -1888,7 +3111,8 @@ export default function App() {
                       void submitSwipe(detailPerson, 'right')
                     }
                   >
-                    Предложить активность <Users size={17} />
+                    Предложить активность
+                    <Users size={17} />
                   </button>
                 </div>
               </>
@@ -1957,41 +3181,75 @@ export default function App() {
                   <ClubIcon id={detailClub.icon} size={28} />
                 </div>
 
-                <div className="eyebrow">КЛУБ GO</div>
+                <div className="eyebrow">
+                  КЛУБ GO
+                </div>
+
                 <h1>{detailClub.title}</h1>
-                <div className="muted">{Number(clubCounts[detailClub.id] || 0)} участников</div>
+
+                <div className="muted">
+                  {Number(clubCounts[detailClub.id] || 0)} участников
+                </div>
+
                 <p>{detailClub.description}</p>
 
                 <div className="club-benefits">
                   {detailClub.perks.map((perk) => (
-                    <span key={perk}><Check size={15} /> {perk}</span>
+                    <span key={perk}>
+                      <Check size={15} />
+                      {perk}
+                    </span>
                   ))}
                 </div>
 
                 <h3>События клуба</h3>
+
                 {clubEvents.length > 0 ? (
                   <div className="people-preview">
                     {clubEvents.slice(0, 4).map((event) => (
-                      <button className="mini-person" key={event.id} onClick={() => openEvent(event.id)}>
-                        <span className={`mini-avatar event-${event.color}`}><CalendarDays size={18} /></span>
+                      <button
+                        className="mini-person"
+                        key={event.id}
+                        onClick={() => openEvent(event.id)}
+                      >
+                        <span className={`mini-avatar event-${event.color}`}>
+                          <CalendarDays size={18} />
+                        </span>
+
                         <span>
                           <b>{event.title}</b>
-                          <small>{displayDate(event.date)} · {event.time} · {event.place}</small>
+                          <small>
+                            {displayDate(event.date)} · {event.time} · {event.place}
+                          </small>
                         </span>
+
                         <ChevronRight size={17} />
                       </button>
                     ))}
                   </div>
                 ) : (
-                  <p className="muted">Пока нет событий. Создай первое для этого клуба.</p>
+                  <p className="muted">
+                    Пока нет событий. Создай первое для этого клуба.
+                  </p>
                 )}
 
-                <button className="primary full" onClick={() => void toggleClub(detailClub.id)}>
-                  {clubJoined.includes(detailClub.id) ? 'Покинуть клуб' : 'Вступить в клуб'}
+                <button
+                  className="primary full"
+                  onClick={() => void toggleClub(detailClub.id)}
+                >
+                  {clubJoined.includes(detailClub.id)
+                    ? 'Покинуть клуб'
+                    : 'Вступить в клуб'}
+
                   <ArrowRight size={17} />
                 </button>
-                <button className="ig-btn club-create" onClick={() => startEventInClub(detailClub)}>
-                  <Plus size={15} /> Создать событие в клубе
+
+                <button
+                  className="ig-btn club-create"
+                  onClick={() => startEventInClub(detailClub)}
+                >
+                  <Plus size={15} />
+                  Создать событие в клубе
                 </button>
               </div>
             )}
@@ -2000,36 +3258,94 @@ export default function App() {
       )}
 
       {eventsOpen && (
-        <div className="detail-backdrop" onClick={() => setEventsOpen(false)}>
-          <section className="detail-sheet" onClick={(e) => e.stopPropagation()}>
+        <div
+          className="detail-backdrop"
+          onClick={() => setEventsOpen(false)}
+        >
+          <section
+            className="detail-sheet"
+            onClick={(event) => event.stopPropagation()}
+          >
             <div className="detail-handle" />
-            <button className="detail-close" onClick={() => setEventsOpen(false)} aria-label="Закрыть"><X size={20} /></button>
+
+            <button
+              className="detail-close"
+              onClick={() => setEventsOpen(false)}
+              aria-label="Закрыть"
+            >
+              <X size={20} />
+            </button>
+
             <div className="detail-content">
-              <div className="eyebrow">ВСЕ СОБЫТИЯ</div>
+              <div className="eyebrow">
+                ВСЕ СОБЫТИЯ
+              </div>
+
               <h1>Ближайшие встречи</h1>
+
               <div className="chip-row">
-                {([['all', 'Все'], ['near', 'Рядом'], ['you', 'Для тебя'], ['today', 'Сегодня'], ['week', '7 дней']] as const).map(([id, label]) => (
-                  <button key={id} className={`chip ${eventFilter === id ? 'on' : ''}`} onClick={() => setEventFilter(id)}>{label}</button>
+                {([
+                  ['all', 'Все'],
+                  ['near', 'Рядом'],
+                  ['you', 'Для тебя'],
+                  ['today', 'Сегодня'],
+                  ['week', '7 дней'],
+                ] as const).map(([id, label]) => (
+                  <button
+                    key={id}
+                    className={`chip ${eventFilter === id ? 'on' : ''}`}
+                    onClick={() => setEventFilter(id)}
+                  >
+                    {label}
+                  </button>
                 ))}
               </div>
+
               {filteredEvents.length > 0 ? (
                 <div className="people-preview">
                   {filteredEvents.map((event) => (
-                    <button className="mini-person" key={event.id} onClick={() => { setEventsOpen(false); openEvent(event.id); }}>
-                      <span className={`mini-avatar event-${event.color}`}><CalendarDays size={18} /></span>
-                      <span>
-                        <b>{event.title}{event.forYou ? ' ★' : ''}</b>
-                        <small>{displayDate(event.date)} · {event.time} · {event.place} · {event.participantCount}/{event.capacity}</small>
+                    <button
+                      className="mini-person"
+                      key={event.id}
+                      onClick={() => {
+                        setEventsOpen(false);
+                        openEvent(event.id);
+                      }}
+                    >
+                      <span className={`mini-avatar event-${event.color}`}>
+                        <CalendarDays size={18} />
                       </span>
+
+                      <span>
+                        <b>
+                          {event.title}
+                          {event.forYou ? ' ★' : ''}
+                        </b>
+
+                        <small>
+                          {displayDate(event.date)} · {event.time} · {event.place} · {event.participantCount}/{event.capacity}
+                        </small>
+                      </span>
+
                       <ChevronRight size={17} />
                     </button>
                   ))}
                 </div>
               ) : (
-                <p className="muted">Ничего не найдено. Попробуй другой фильтр или создай своё событие.</p>
+                <p className="muted">
+                  Ничего не найдено. Попробуй другой фильтр или создай своё событие.
+                </p>
               )}
-              <button className="primary full" onClick={() => { setEventsOpen(false); startCreate(); }}>
-                Создать событие <Plus size={16} />
+
+              <button
+                className="primary full"
+                onClick={() => {
+                  setEventsOpen(false);
+                  startCreate();
+                }}
+              >
+                Создать событие
+                <Plus size={16} />
               </button>
             </div>
           </section>
@@ -2037,13 +3353,44 @@ export default function App() {
       )}
 
       {viewPost && (
-        <div className="detail-backdrop" onClick={() => setViewPost(null)}>
-          <section className="ig-viewer" onClick={(e) => e.stopPropagation()}>
-            <button className="detail-close" onClick={() => setViewPost(null)} aria-label="Закрыть"><X size={20} /></button>
-            <img src={viewPost.photoUrl} alt={viewPost.caption || ''} />
+        <div
+          className="detail-backdrop"
+          onClick={() => setViewPost(null)}
+        >
+          <section
+            className="ig-viewer"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <button
+              className="detail-close"
+              onClick={() => setViewPost(null)}
+              aria-label="Закрыть"
+            >
+              <X size={20} />
+            </button>
+
+            <img
+              src={viewPost.photoUrl}
+              alt={viewPost.caption || ''}
+            />
+
             <div className="ig-viewer-bar">
-              <span>{viewPost.createdAt ? new Date(viewPost.createdAt).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' }) : ''}</span>
-              <button onClick={() => void deletePost(viewPost)}><Trash2 size={17} /> Удалить</button>
+              <span>
+                {viewPost.createdAt
+                  ? new Date(viewPost.createdAt).toLocaleDateString(
+                      'ru-RU',
+                      {
+                        day: 'numeric',
+                        month: 'long',
+                      }
+                    )
+                  : ''}
+              </span>
+
+              <button onClick={() => void deletePost(viewPost)}>
+                <Trash2 size={17} />
+                Удалить
+              </button>
             </div>
           </section>
         </div>
@@ -2088,7 +3435,9 @@ export default function App() {
                         <small>{item.text}</small>
                       </span>
 
-                      {!item.read && <span className="status-on" />}
+                      {!item.read && (
+                        <span className="status-on" />
+                      )}
                     </div>
                   ))}
                 </div>
