@@ -3,14 +3,16 @@ import {
   ArrowRight, ArrowUpRight, Bell, CalendarDays, Check,
   ChevronRight, Compass, MapPin, Plus, Search,
   Settings, Sparkles, Users, UsersRound, UserRound,
-  X, Clock3, SlidersHorizontal
+  X, Clock3, SlidersHorizontal, LayoutGrid, Trash2, Camera
 } from 'lucide-react';
 import { firebaseConfigured, storage } from './firebase';
-import { getDownloadURL, ref as storageRef, uploadBytes } from 'firebase/storage';
+import { deleteObject, getDownloadURL, ref as storageRef, uploadBytes } from 'firebase/storage';
+import './profile.css';
 import { authenticateTelegram } from './telegramAuth';
 import {
   goCreateEvent,
   goCreatePhotoPost,
+  goDeletePhotoPost,
   goGetData,
   goJoinEvent,
   goMarkNotificationsRead,
@@ -261,6 +263,17 @@ function errorMessage(error: unknown) {
   return String(error || 'Неизвестная ошибка');
 }
 
+async function prepareImage(file: File, max = 1280): Promise<Blob> {
+  const bmp = await createImageBitmap(file);
+  const k = Math.min(1, max / Math.max(bmp.width, bmp.height));
+  const c = document.createElement('canvas');
+  c.width = Math.round(bmp.width * k);
+  c.height = Math.round(bmp.height * k);
+  c.getContext('2d')!.drawImage(bmp, 0, 0, c.width, c.height);
+  return new Promise((res, rej) =>
+    c.toBlob((b) => (b ? res(b) : rej(new Error('Не удалось обработать фото'))), 'image/jpeg', 0.85));
+}
+
 export default function App() {
   const [tab, setTab] = useState<Tab>('home');
   const [dragX, setDragX] = useState(0);
@@ -287,6 +300,7 @@ export default function App() {
   const [matches, setMatches] = useState<ApiMatch[]>([]);
   const [notifications, setNotifications] = useState<ApiNotification[]>([]);
   const [clubJoined, setClubJoined] = useState<string[]>([]);
+  const [viewPost, setViewPost] = useState<ApiPhotoPost | null>(null);
   const [eventForm, setEventForm] = useState({
     title: '',
     description: '',
@@ -311,6 +325,12 @@ export default function App() {
   });
 
   const unreadCount = notifications.filter((item) => !item.read).length;
+
+  useEffect(() => {
+    if (!notice) return;
+    const t = setTimeout(() => setNotice(''), 4000);
+    return () => clearTimeout(t);
+  }, [notice]);
 
   // Telegram Mini App setup.
   useEffect(() => {
@@ -394,7 +414,9 @@ export default function App() {
         )
       );
 
-      setEvents(data.events.map(toEvent));
+      setEvents(
+        data.events.map(toEvent).sort((x, y) => `${x.date}${x.time}`.localeCompare(`${y.date}${y.time}`))
+      );
       setMatches(data.matches || []);
       setNotifications(data.notifications || []);
       setClubJoined(data.clubMemberships || []);
@@ -430,7 +452,9 @@ export default function App() {
     }
     // refreshData intentionally runs only when auth status changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authStatus]);  // Telegram back button.
+  }, [authStatus]);
+
+  // Telegram back button.
   useEffect(() => {
     const tg = window.Telegram?.WebApp;
     if (!tg) return;
@@ -532,7 +556,12 @@ export default function App() {
     if (swipeDirection || swipeLock || !currentPerson) return;
 
     setSwipeDirection(direction);
-    await submitSwipe(currentPerson, direction);
+    try {
+      await submitSwipe(currentPerson, direction);
+    } finally {
+      setSwipeDirection('');
+      setDragX(0);
+    }
   };
 
   const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
@@ -597,7 +626,8 @@ export default function App() {
     }
 
     try {
-      await goJoinEvent({ eventId });      await refreshData();
+      await goJoinEvent({ eventId });
+      await refreshData();
       setNotice('Ты добавлен в список участников.');
     } catch (error) {
       setNotice(
@@ -769,19 +799,11 @@ export default function App() {
       setNotice('Сначала сохрани анкету и войди через Telegram');
       return;
     }
-    if (!file.type.startsWith('image/')) {
-      setNotice('Выбери файл изображения');
-      return;
-    }
-    if (file.size > 8 * 1024 * 1024) {
-      setNotice('Фото должно быть не больше 8 МБ');
-      return;
-    }
     setPhotoBusy(true);
     try {
-      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 80);
-      const imageRef = storageRef(storage, `profilePhotos/${profile.uid}/avatar/${Date.now()}-${safeName}`);
-      const uploaded = await uploadBytes(imageRef, file, { contentType: file.type });
+      const blob = await prepareImage(file);
+      const imageRef = storageRef(storage, `profilePhotos/${profile.uid}/avatar/${Date.now()}.jpg`);
+      const uploaded = await uploadBytes(imageRef, blob, { contentType: 'image/jpeg' });
       const photoUrl = await getDownloadURL(uploaded.ref);
       await goSaveProfile({
         name: profile.name,
@@ -807,19 +829,11 @@ export default function App() {
       setNotice('Сначала создай и сохрани анкету');
       return;
     }
-    if (!file.type.startsWith('image/')) {
-      setNotice('Выбери файл изображения');
-      return;
-    }
-    if (file.size > 10 * 1024 * 1024) {
-      setNotice('Фото должно быть не больше 10 МБ');
-      return;
-    }
     setPhotoBusy(true);
     try {
-      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 80);
-      const imageRef = storageRef(storage, `profilePhotos/${profile.uid}/posts/${Date.now()}-${safeName}`);
-      const uploaded = await uploadBytes(imageRef, file, { contentType: file.type });
+      const blob = await prepareImage(file);
+      const imageRef = storageRef(storage, `profilePhotos/${profile.uid}/posts/${Date.now()}.jpg`);
+      const uploaded = await uploadBytes(imageRef, blob, { contentType: 'image/jpeg' });
       const photoUrl = await getDownloadURL(uploaded.ref);
       await goCreatePhotoPost({ photoUrl, caption: '' });
       await refreshData();
@@ -829,6 +843,21 @@ export default function App() {
     } finally {
       setPhotoBusy(false);
       if (postInputRef.current) postInputRef.current.value = '';
+    }
+  };
+
+  const deletePost = async (post: ApiPhotoPost) => {
+    if (!window.confirm('Удалить публикацию?')) return;
+    try {
+      await goDeletePhotoPost({ postId: post.id });
+      if (storage) {
+        try { await deleteObject(storageRef(storage, post.photoUrl)); } catch { /* файл мог уже удалиться */ }
+      }
+      setViewPost(null);
+      await refreshData();
+      setNotice('Публикация удалена');
+    } catch (error) {
+      setNotice(`Не удалось удалить: ${errorMessage(error)}`);
     }
   };
 
@@ -1074,7 +1103,9 @@ export default function App() {
               </div>
             </section>
           </section>
-        )}        {tab === 'people' && (
+        )}
+
+        {tab === 'people' && (
           <section className="screen people-page">
             <div className="eyebrow">СОВПАДЕНИЕ ПО ИНТЕРЕСАМ</div>
 
@@ -1196,7 +1227,8 @@ export default function App() {
 
                       <span className="online-pill">
                         <i /> В поиске компании
-                      </span>                    </div>
+                      </span>
+                    </div>
 
                     <div
                       className="person-info"
@@ -1421,107 +1453,92 @@ export default function App() {
         )}
 
         {tab === 'profile' && (
-          <section className="screen profile-page">
-            <input ref={avatarInputRef} className="visually-hidden-input" type="file" accept="image/*" onChange={(event) => void uploadAvatar(event.target.files?.[0])} />
-            <input ref={postInputRef} className="visually-hidden-input" type="file" accept="image/*" onChange={(event) => void createPhotoPost(event.target.files?.[0])} />
-            <div className="profile-cover">
-              {profile?.photoUrl ? (
-                <img className="profile-avatar-image" src={profile.photoUrl} alt="Фото профиля" />
-              ) : (
-                <div className="profile-avatar">{profile ? initialsFor(profile.name) : 'G'}</div>
-              )}
-              {profile && (
-                <button className="profile-add-post" aria-label="Добавить публикацию" onClick={() => postInputRef.current?.click()} disabled={photoBusy}>
-                  <Plus size={18} />
-                </button>
-              )}
-              <button className="profile-settings" aria-label="Настройки" onClick={() => setProfileEditing(true)}>
-                <Settings size={18} />
-              </button>
-            </div>
-            <div className="eyebrow">ТВОЯ СТРАНИЦА</div>
-            <div className="profile-title-row">
-              <h1 className="page-title">{profile?.name || 'Твой профиль'}.</h1>
-              {profile && !profileEditing && <button className="profile-edit-icon" onClick={() => setProfileEditing(true)} aria-label="Изменить профиль"><Settings size={17} /></button>}
-            </div>
+          <section className="screen ig-profile">
+            <input ref={avatarInputRef} className="visually-hidden-input" type="file" accept="image/*" onChange={(e) => void uploadAvatar(e.target.files?.[0])} />
+            <input ref={postInputRef} className="visually-hidden-input" type="file" accept="image/*" onChange={(e) => void createPhotoPost(e.target.files?.[0])} />
+
             {profile && !profileEditing ? (
               <>
-                <p className="muted profile-bio">{profile.bio || 'Добавь пару слов о себе.'}</p>
-                <div className="profile-stats">
-                  <div><b>{photoPosts.length}</b><span>публикации</span></div>
-                  <div><b>{matches.length}</b><span>совпадения</span></div>
-                  <div><b>{events.filter((event) => event.joined).length}</b><span>события</span></div>
-                </div>
-                <div className="profile-fields">
-                  <div><span>Возраст</span><b>{profile.age}</b></div>
-                  <div><span>Город</span><b>{profile.city || 'Не указан'}</b></div>
-                  <div className="profile-interest-row">
-                    <span>Интересы</span>
-                    <div className="tags">{(profile.interests || []).map((tag) => <span key={tag}>{tag}</span>)}</div>
+                <div className="ig-head">
+                  <button className="ig-avatar-ring" onClick={() => avatarInputRef.current?.click()} disabled={photoBusy} aria-label="Сменить фото профиля">
+                    <span className="ig-avatar">
+                      {profile.photoUrl ? <img src={profile.photoUrl} alt="" /> : initialsFor(profile.name)}
+                    </span>
+                    <span className="ig-avatar-plus"><Camera size={13} /></span>
+                  </button>
+                  <div className="ig-stats">
+                    <div><b>{photoPosts.length}</b><span>публикации</span></div>
+                    <div><b>{matches.length}</b><span>совпадения</span></div>
+                    <div><b>{events.filter((e) => e.joined).length}</b><span>события</span></div>
                   </div>
                 </div>
-                <button className="primary full" onClick={() => setProfileEditing(true)}>Изменить анкету <ArrowRight size={16} /></button>
+
+                <div className="ig-bio">
+                  <h1>{profile.name}, {profile.age}</h1>
+                  {profile.city && <div className="ig-city"><MapPin size={13} /> {profile.city}</div>}
+                  <p>{profile.bio || 'Добавь пару слов о себе.'}</p>
+                  {(profile.interests || []).length > 0 && (
+                    <div className="tags">{profile.interests.map((t) => <span key={t}>{t}</span>)}</div>
+                  )}
+                </div>
+
+                <div className="ig-actions">
+                  <button className="ig-btn" onClick={() => setProfileEditing(true)}><Settings size={15} /> Изменить анкету</button>
+                  <button className="ig-btn ig-btn-accent" onClick={() => postInputRef.current?.click()} disabled={photoBusy}>
+                    <Plus size={15} /> {photoBusy ? 'Загрузка…' : 'Фото'}
+                  </button>
+                </div>
+
+                <div className="ig-tab"><LayoutGrid size={20} /></div>
+
+                {photoPosts.length > 0 || photoBusy ? (
+                  <div className="ig-grid">
+                    {photoBusy && <div className="ig-tile ig-tile-loading">…</div>}
+                    {photoPosts.map((post) => (
+                      <button className="ig-tile" key={post.id} onClick={() => setViewPost(post)}>
+                        <img src={post.photoUrl} alt={post.caption || 'Публикация'} loading="lazy" />
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="ig-empty">
+                    <div className="ig-empty-icon"><Camera size={26} /></div>
+                    <b>Пока нет публикаций</b>
+                    <span>Поделись первым фото — оно появится здесь</span>
+                    <button className="primary" onClick={() => postInputRef.current?.click()}>Опубликовать фото</button>
+                  </div>
+                )}
               </>
             ) : (
               <>
-                <p className="muted">Расскажи о себе, чтобы находить людей со схожими интересами.</p>
+                <div className="eyebrow">ТВОЯ АНКЕТА</div>
+                <h1 className="page-title">{profile ? 'Изменить' : 'Расскажи'}<br /><span>о себе.</span></h1>
                 <div className="form-preview">
                   {profile && (
                     <button type="button" className="avatar-upload-button" onClick={() => avatarInputRef.current?.click()} disabled={photoBusy}>
-                      <UserRound size={17} /> {photoBusy ? 'Загружаем фото...' : 'Изменить фото профиля'}
+                      <Camera size={17} /> {photoBusy ? 'Загружаем фото...' : 'Изменить фото профиля'}
                     </button>
                   )}
                   <label>Имя
-                    <input value={profileForm.name} onChange={(event) => setProfileForm((old) => ({ ...old, name: event.target.value }))} placeholder="Как тебя зовут?" maxLength={40} />
+                    <input value={profileForm.name} onChange={(e) => setProfileForm((o) => ({ ...o, name: e.target.value }))} placeholder="Как тебя зовут?" maxLength={40} />
                   </label>
                   <label>Возраст (13–17)
-                    <input type="number" min="13" max="17" value={profileForm.age} onChange={(event) => setProfileForm((old) => ({ ...old, age: event.target.value }))} placeholder="Например, 16" />
+                    <input type="number" min="13" max="17" value={profileForm.age} onChange={(e) => setProfileForm((o) => ({ ...o, age: e.target.value }))} placeholder="Например, 16" />
                   </label>
                   <label>Город
-                    <input value={profileForm.city} onChange={(event) => setProfileForm((old) => ({ ...old, city: event.target.value }))} placeholder="Твой город" maxLength={60} />
+                    <input value={profileForm.city} onChange={(e) => setProfileForm((o) => ({ ...o, city: e.target.value }))} placeholder="Твой город" maxLength={60} />
                   </label>
                   <label>О себе
-                    <textarea value={profileForm.bio} onChange={(event) => setProfileForm((old) => ({ ...old, bio: event.target.value }))} placeholder="Расскажи, что тебе интересно..." rows={3} maxLength={300} />
+                    <textarea value={profileForm.bio} onChange={(e) => setProfileForm((o) => ({ ...o, bio: e.target.value }))} placeholder="Расскажи, что тебе интересно..." rows={3} maxLength={300} />
                   </label>
                   <label>Интересы через запятую
-                    <input value={profileForm.interests} onChange={(event) => setProfileForm((old) => ({ ...old, interests: event.target.value }))} placeholder="Музыка, игры, прогулки" />
+                    <input value={profileForm.interests} onChange={(e) => setProfileForm((o) => ({ ...o, interests: e.target.value }))} placeholder="Музыка, игры, прогулки" />
                   </label>
-                  <button className="primary" onClick={() => void saveProfile()} disabled={photoBusy}>Сохранить анкету <Check size={16} /></button>
+                  <button className="primary" onClick={() => void saveProfile()} disabled={photoBusy}>Сохранить <Check size={16} /></button>
                   {profile && <button className="text-button" onClick={() => setProfileEditing(false)}>Отмена</button>}
                 </div>
               </>
             )}
-            <section className="profile-posts">
-              <div className="profile-posts-heading">
-                <div><div className="eyebrow">ТВОИ МОМЕНТЫ</div><h2>Публикации</h2></div>
-                {profile && <button className="text-button" onClick={() => postInputRef.current?.click()} disabled={photoBusy}><Plus size={15} /> Добавить</button>}
-              </div>
-              {photoPosts.length > 0 ? (
-                <div className="photo-grid">
-                  {photoPosts.map((post) => <div className="photo-tile" key={post.id}><img src={post.photoUrl} alt={post.caption || 'Публикация профиля'} loading="lazy" /></div>)}
-                </div>
-              ) : (
-                <div className="profile-empty-posts">
-                  <div className="profile-empty-icon"><Plus size={22} /></div>
-                  <b>Пока нет публикаций</b>
-                  <span>Добавь фотографии — они появятся здесь.</span>
-                  {profile && <button className="text-button" onClick={() => postInputRef.current?.click()} disabled={photoBusy}>Опубликовать первое фото</button>}
-                </div>
-              )}
-            </section>
-            <div className="profile-status">
-              <span className={authStatus === 'signed-in' ? 'status-on' : 'status-off'} />
-              Telegram: {
-                authStatus === 'checking' ? 'проверяем вход...' :
-                authStatus === 'signed-in' ? 'авторизован ✓' :
-                authStatus === 'not-in-telegram' ? 'открой через Telegram' : 'ошибка входа'
-              }
-            </div>
-            <div className="profile-status">
-              <span className={firebaseConfigured ? 'status-on' : 'status-off'} />
-              Firebase: {firebaseConfigured ? 'подключён' : 'не настроен'}
-            </div>
-            {dataLoading && <div className="profile-status">Загружаем данные...</div>}
           </section>
         )}
       </main>
@@ -1720,6 +1737,19 @@ export default function App() {
                 </button>
               </div>
             )}
+          </section>
+        </div>
+      )}
+
+      {viewPost && (
+        <div className="detail-backdrop" onClick={() => setViewPost(null)}>
+          <section className="ig-viewer" onClick={(e) => e.stopPropagation()}>
+            <button className="detail-close" onClick={() => setViewPost(null)} aria-label="Закрыть"><X size={20} /></button>
+            <img src={viewPost.photoUrl} alt={viewPost.caption || ''} />
+            <div className="ig-viewer-bar">
+              <span>{viewPost.createdAt ? new Date(viewPost.createdAt).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' }) : ''}</span>
+              <button onClick={() => void deletePost(viewPost)}><Trash2 size={17} /> Удалить</button>
+            </div>
           </section>
         </div>
       )}
