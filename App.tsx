@@ -3,7 +3,7 @@ import {
   ArrowRight, ArrowUpRight, Bell, CalendarDays, Check,
   ChevronRight, Compass, MapPin, Plus, Search,
   Settings, Sparkles, Users, UsersRound, UserRound, Send, Music2, Dumbbell,
-  X, Clock3, SlidersHorizontal, LayoutGrid, Trash2, Camera, Star, Gamepad2, Palette, Cpu
+  X, Clock3, SlidersHorizontal, LayoutGrid, Trash2, Camera, Star, Gamepad2, Palette, Cpu, ChevronLeft
 } from 'lucide-react';
 import { firebaseConfigured, storage } from './firebase';
 import { deleteObject, getDownloadURL, ref as storageRef, uploadBytes } from 'firebase/storage';
@@ -489,6 +489,111 @@ async function prepareImage(file: File, max = 1280): Promise<Blob> {
   );
 }
 
+function eventIcon(category: string) {
+  const value = norm(category);
+
+  if (value.includes('спорт')) return Dumbbell;
+  if (value.includes('музык')) return Music2;
+  if (value.includes('игр')) return Gamepad2;
+  if (
+    value.includes('твор') ||
+    value.includes('фото') ||
+    value.includes('арт')
+  ) {
+    return Palette;
+  }
+  if (value.includes('тех')) return Cpu;
+  if (value.includes('встреч')) return Users;
+
+  return Sparkles;
+}
+
+// У событий нет загруженных фото, поэтому обложка рисуется по категории.
+function EventCover({ category, size }: { category: string; size: number }) {
+  const Icon = eventIcon(category);
+
+  return (
+    <div className="cover" aria-hidden="true">
+      <span className="cover-ring r1" />
+      <span className="cover-ring r2" />
+      <span className="cover-icon">
+        <Icon size={size} />
+      </span>
+    </div>
+  );
+}
+
+function EventTile({
+  event,
+  variant,
+  onOpen,
+}: {
+  event: EventItem;
+  variant: 'hero' | 'rail';
+  onOpen: (id: string) => void;
+}) {
+  const fill = Math.min(
+    100,
+    Math.round((event.participantCount / Math.max(1, event.capacity)) * 100)
+  );
+
+  const Title = variant === 'hero' ? 'h2' : 'h3';
+
+  return (
+    <button
+      className={`event-tile ${variant} event-${event.color}`}
+      onClick={() => onOpen(event.id)}
+    >
+      <EventCover category={event.category} size={variant === 'hero' ? 26 : 22} />
+      <div className="cover-shade" />
+
+      <div className="event-topline">
+        <span className="event-tags">
+          <span className="event-category">{event.category}</span>
+
+          {event.nearby && (
+            <span className="badge-near">
+              <MapPin size={10} />
+              Рядом
+            </span>
+          )}
+        </span>
+
+        {event.forYou && (
+          <span className="badge-you">
+            <Star size={11} />
+            Для тебя
+          </span>
+        )}
+      </div>
+
+      <div className="event-body">
+        <div className="event-meta">
+          <CalendarDays size={13} />
+          {displayDate(event.date)} · {event.time}
+        </div>
+
+        <Title>{event.title}</Title>
+
+        <div className="event-bottom">
+          <span>
+            <MapPin size={13} />
+            {event.place}
+          </span>
+
+          <b>
+            {event.participantCount}/{event.capacity}
+          </b>
+        </div>
+
+        <div className="fill-bar">
+          <i style={{ width: `${fill}%` }} />
+        </div>
+      </div>
+    </button>
+  );
+}
+
 export default function App() {
   const [tab, setTab] = useState<Tab>('home');
   const [dragX, setDragX] = useState(0);
@@ -644,6 +749,18 @@ export default function App() {
     ? scorePerson(profile, currentPerson)
     : null;
 
+  // Слабые устройства: отключаем backdrop-filter и анимации (класс .lite).
+  useEffect(() => {
+    const nav = navigator as Navigator & { deviceMemory?: number };
+
+    const weak =
+      (nav.deviceMemory !== undefined && nav.deviceMemory <= 2) ||
+      (navigator.hardwareConcurrency !== undefined &&
+        navigator.hardwareConcurrency <= 2);
+
+    document.documentElement.classList.toggle('lite', weak);
+  }, []);
+
   // Скрываем нижнюю панель, пока открыта клавиатура.
   useEffect(() => {
     const isField = (target: EventTarget | null) =>
@@ -696,8 +813,8 @@ export default function App() {
     tg.ready();
     tg.expand();
     tg.disableVerticalSwipes?.();
-    tg.setHeaderColor?.('#090a0f');
-    tg.setBackgroundColor?.('#090a0f');
+    tg.setHeaderColor?.('#0a0613');
+    tg.setBackgroundColor?.('#0a0613');
 
     const telegramName = [
       tg.initDataUnsafe?.user?.first_name,
@@ -1638,6 +1755,26 @@ export default function App() {
       )
     : [];
 
+  const greetName = profile ? profile.name.split(' ')[0] : '';
+  const featuredEvent = filteredEvents[0];
+  const railEvents = filteredEvents.slice(1, 9);
+
+  const eventFilters = [
+    ['all', 'Все'],
+    ['near', 'Рядом'],
+    ['you', 'Для тебя'],
+    ['today', 'Сегодня'],
+    ['week', '7 дней'],
+  ] as const;
+
+  const detailMatch = detailPerson
+    ? scorePerson(profile, detailPerson)
+    : null;
+
+  const detailIsMatched = detailPerson
+    ? matchedPeople.some((person) => person.uid === detailPerson.uid)
+    : false;
+
   return (
     <div className={`app-shell${kbOpen ? ' kb-open' : ''}`}>
       <header className="topbar">
@@ -1652,9 +1789,6 @@ export default function App() {
           </span>
         </button>
 
-        <div className="top-caption">
-          Люди рядом. Интересы вместе.
-        </div>
 
         <button
           className="icon-button top-action"
@@ -1682,21 +1816,22 @@ export default function App() {
       <main className="main-content">
         {tab === 'home' && (
           <section className="screen screen-home">
-            <div className="home-greet">
-              <div className="eyebrow">
-                <Sparkles size={14} /> {profile ? 'ТВОЯ ЛЕНТА' : 'ДОБРО ПОЖАЛОВАТЬ'}
+            <div className="home-head">
+              <div>
+                <div className="eyebrow">
+                  <Sparkles size={13} />
+                  {profile ? `Привет, ${greetName}` : 'Добро пожаловать'}
+                </div>
+
+                <h1 className="home-title">
+                  События<span>.</span>
+                </h1>
               </div>
 
-              <h1 className="home-title">
-                {profile
-                  ? `Привет, ${profile.name.split(' ')[0]}`
-                  : 'Привет'}
-                <span>.</span>
-              </h1>
-
-              <p className="muted">
-                Люди, события и клубы по твоим интересам.
-              </p>
+              <button className="glass-btn" onClick={startCreate}>
+                <Plus size={15} />
+                Создать
+              </button>
             </div>
 
             {authStatus === 'signed-in' && !dataLoading && !profile && (
@@ -1719,6 +1854,81 @@ export default function App() {
               </button>
             )}
 
+            <div className="chip-row chip-scroll">
+              {eventFilters.map(([id, label]) => (
+                <button
+                  key={id}
+                  className={`chip ${eventFilter === id ? 'on' : ''}`}
+                  onClick={() => setEventFilter(id)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            {featuredEvent ? (
+              <>
+                <EventTile
+                  event={featuredEvent}
+                  variant="hero"
+                  onOpen={openEvent}
+                />
+
+                {railEvents.length > 0 && (
+                  <section className="section">
+                    <div className="section-heading">
+                      <div>
+                        <div className="eyebrow">БЛИЖАЙШИЕ</div>
+                        <h2>События рядом</h2>
+                      </div>
+
+                      <button
+                        className="text-button"
+                        onClick={() => setEventsOpen(true)}
+                      >
+                        Все ({upcomingEvents.length})
+                        <ArrowUpRight size={14} />
+                      </button>
+                    </div>
+
+                    <div className="event-rail">
+                      {railEvents.map((event) => (
+                        <EventTile
+                          key={event.id}
+                          event={event}
+                          variant="rail"
+                          onOpen={openEvent}
+                        />
+                      ))}
+                    </div>
+                  </section>
+                )}
+              </>
+            ) : upcomingEvents.length > 0 ? (
+              <div className="empty-card">
+                <CalendarDays size={26} />
+                <b>По этому фильтру ничего нет</b>
+                <span>Попробуй другой фильтр или покажи все события</span>
+                <button
+                  className="primary"
+                  onClick={() => setEventFilter('all')}
+                >
+                  Показать все
+                </button>
+              </div>
+            ) : (
+              <div className="empty-card">
+                <CalendarDays size={26} />
+                <b>Пока нет событий</b>
+                <span>
+                  Создай первое — другие участники увидят его здесь
+                </span>
+                <button className="primary" onClick={startCreate}>
+                  Создать событие
+                </button>
+              </div>
+            )}
+
             <div className="quick-actions">
               <button onClick={() => changeTab('people')}>
                 <Users size={19} />
@@ -1735,106 +1945,6 @@ export default function App() {
                 <span>Клубы</span>
               </button>
             </div>
-
-            <section className="section">
-              <div className="section-heading">
-                <div>
-                  <div className="eyebrow">БЛИЖАЙШИЕ</div>
-                  <h2>События рядом</h2>
-                </div>
-
-                {upcomingEvents.length > 0 && (
-                  <button
-                    className="text-button"
-                    onClick={() => setEventsOpen(true)}
-                  >
-                    Все ({upcomingEvents.length})
-                    <ArrowUpRight size={14} />
-                  </button>
-                )}
-              </div>
-
-              {upcomingEvents.length > 0 ? (
-                <div className="event-rail">
-                  {upcomingEvents.slice(0, 8).map((event) => (
-                    <button
-                      className={`event-card rail event-${event.color}`}
-                      key={event.id}
-                      onClick={() => openEvent(event.id)}
-                    >
-                      <div className="event-topline">
-                        <span className="event-tags">
-                          <span className="event-category">
-                            {event.category}
-                          </span>
-
-                          {event.nearby && (
-                            <span className="badge-near">
-                              <MapPin size={10} />
-                              Рядом
-                            </span>
-                          )}
-                        </span>
-
-                        {event.forYou ? (
-                          <span className="badge-you">
-                            <Star size={11} />
-                            Для тебя
-                          </span>
-                        ) : (
-                          <span className="event-arrow">
-                            <ArrowUpRight size={16} />
-                          </span>
-                        )}
-                      </div>
-
-                      <div className="event-meta">
-                        <CalendarDays size={13} />
-                        {displayDate(event.date)} · {event.time}
-                      </div>
-
-                      <h3>{event.title}</h3>
-
-                      <div className="event-bottom">
-                        <span>
-                          <MapPin size={13} />
-                          {event.place}
-                        </span>
-
-                        <b>
-                          {event.participantCount}/{event.capacity}
-                        </b>
-                      </div>
-
-                      <div className="fill-bar">
-                        <i
-                          style={{
-                            width: `${Math.min(
-                              100,
-                              Math.round(
-                                (event.participantCount /
-                                  Math.max(1, event.capacity)) * 100
-                              )
-                            )}%`,
-                          }}
-                        />
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              ) : (
-                <div className="empty-card">
-                  <CalendarDays size={26} />
-                  <b>Пока нет событий</b>
-                  <span>
-                    Создай первое — другие участники увидят его здесь
-                  </span>
-                  <button className="primary" onClick={startCreate}>
-                    Создать событие
-                  </button>
-                </div>
-              )}
-            </section>
 
             <section className="section">
               <div className="section-heading">
@@ -2089,12 +2199,6 @@ export default function App() {
                     <div className={`person-art ${currentPerson.color}`}>
                       <div className="person-art-orb" />
 
-                      <span className="person-number">
-                        {currentMatch && currentMatch.percent > 0
-                          ? `${currentMatch.percent}% совпадение`
-                          : 'GO / PROFILE'}
-                      </span>
-
                       {currentPerson.photoUrl ? (
                         <img
                           className="person-photo"
@@ -2108,40 +2212,64 @@ export default function App() {
                         </div>
                       )}
 
-                      <span className="online-pill">
-                        <i />
-                        В поиске компании
-                      </span>
+                      <div className="person-shade" />
+
+                      <div className="person-badges">
+                        <span className="person-number">
+                          <Sparkles size={11} />
+                          {currentMatch && currentMatch.percent > 0
+                            ? `${currentMatch.percent}% совпадение`
+                            : 'GO'}
+                        </span>
+
+                        {Boolean(profile?.city) &&
+                          norm(profile?.city || '') === norm(currentPerson.city) && (
+                            <span className="person-near">
+                              <MapPin size={11} />
+                              В твоём городе
+                            </span>
+                          )}
+                      </div>
+
+                      <div className="person-overlay">
+                        <h2>
+                          {currentPerson.name}
+                          <span>, {currentPerson.age}</span>
+                        </h2>
+
+                        <div className="person-meta">
+                          <span className="online-pill">
+                            <i />
+                            В поиске компании
+                          </span>
+
+                          <span className="person-location">
+                            <MapPin size={12} />
+                            {currentPerson.city}
+                          </span>
+                        </div>
+                      </div>
                     </div>
 
                     <div className="person-info">
-                      <div className="person-location">
-                        <MapPin size={13} />
-                        {currentPerson.city}
-                      </div>
-
-                      <h2>
-                        {currentPerson.name}, {currentPerson.age}
-                      </h2>
-
-                      <p>{currentPerson.bio}</p>
-
-                      <div className="tags">
-                        {currentPerson.interests.map((tag) => (
-                          <span
-                            key={tag}
-                            className={
-                              currentMatch?.shared.some(
-                                (shared) => sameInterest(shared, tag)
-                              )
-                                ? 'tag-shared'
-                                : ''
-                            }
-                          >
-                            {tag}
-                          </span>
-                        ))}
-                      </div>
+                      {currentPerson.interests.length > 0 && (
+                        <div className="tags">
+                          {currentPerson.interests.slice(0, 5).map((tag) => (
+                            <span
+                              key={tag}
+                              className={
+                                currentMatch?.shared.some(
+                                  (shared) => sameInterest(shared, tag)
+                                )
+                                  ? 'tag-shared'
+                                  : ''
+                              }
+                            >
+                              {tag}
+                            </span>
+                          ))}
+                        </div>
+                      )}
 
                       <button className="profile-open" type="button">
                         Открыть анкету
@@ -2995,7 +3123,7 @@ export default function App() {
         {nav.map(({ id, label, Icon }) => (
           <button
             key={id}
-            className={tab === id ? 'active' : ''}
+            className={`${tab === id ? 'active' : ''}${id === 'create' ? ' nav-create' : ''}`}
             onClick={() => changeTab(id)}
             aria-current={tab === id ? 'page' : undefined}
           >
@@ -3011,7 +3139,7 @@ export default function App() {
         ))}
       </nav>
 
-      {detail && (
+      {detail && detail.type !== 'person' && (
         <div
           className="detail-backdrop"
           onClick={() => setDetail(null)}
@@ -3030,99 +3158,12 @@ export default function App() {
               <X size={20} />
             </button>
 
-            {detail.type === 'person' && detailPerson && (
-              <>
-                <div className={`detail-person-art ${detailPerson.color}`}>
-                  {detailPerson.photoUrl ? (
-                    <img
-                      className="person-detail-photo"
-                      src={detailPerson.photoUrl}
-                      alt={detailPerson.name}
-                    />
-                  ) : (
-                    <div className="person-avatar large">
-                      {detailPerson.initials}
-                    </div>
-                  )}
-
-                  <span className="online-pill">
-                    <i />
-                    {detailPerson.activity}
-                  </span>
-                </div>
-
-                <div className="detail-content">
-                  <div className="eyebrow">
-                    АНКЕТА УЧАСТНИКА
-                  </div>
-
-                  <h1>
-                    {detailPerson.name}, {detailPerson.age}
-                  </h1>
-
-                  <div className="person-location">
-                    <MapPin size={14} />
-                    {detailPerson.city}
-                  </div>
-
-                  <p>{detailPerson.bio}</p>
-
-                  <h3>Интересы</h3>
-
-                  <div className="tags">
-                    {detailPerson.interests.map((tag) => (
-                      <span
-                        key={tag}
-                        className={
-                          scorePerson(profile, detailPerson).shared.some(
-                            (shared) => sameInterest(shared, tag)
-                          )
-                            ? 'tag-shared'
-                            : ''
-                        }
-                      >
-                        {tag}
-                      </span>
-                    ))}
-                  </div>
-
-                  {personPosts.uid === detailPerson.uid &&
-                    personPosts.posts.length > 0 && (
-                      <>
-                        <h3>Публикации</h3>
-
-                        <div className="ig-grid">
-                          {personPosts.posts.map((post) => (
-                            <div className="ig-tile" key={post.id}>
-                              <img
-                                src={post.photoUrl}
-                                alt={post.caption || 'Публикация'}
-                                loading="lazy"
-                              />
-                            </div>
-                          ))}
-                        </div>
-                      </>
-                    )}
-
-                  <button
-                    className="primary full"
-                    onClick={() =>
-                      void submitSwipe(detailPerson, 'right')
-                    }
-                  >
-                    Предложить активность
-                    <Users size={17} />
-                  </button>
-                </div>
-              </>
-            )}
 
             {detail.type === 'event' && detailEvent && (
               <>
                 <div className={`detail-event-art event-${detailEvent.color}`}>
-                  <CalendarDays size={44} />
-                  <span>СОБЫТИЕ GO</span>
+                  <EventCover category={detailEvent.category} size={30} />
+                  <div className="cover-shade" />
                 </div>
 
                 <div className="detail-content">
@@ -3254,6 +3295,173 @@ export default function App() {
               </div>
             )}
           </section>
+        </div>
+      )}
+
+      {detail?.type === 'person' && detailPerson && (
+        <div className="fs-screen" role="dialog" aria-modal="true">
+          <button
+            className="fs-back"
+            onClick={() => setDetail(null)}
+            aria-label="Назад"
+          >
+            <ChevronLeft size={22} />
+          </button>
+
+          <div className="fs-inner">
+            <div className="fs-hero">
+              <div className="fs-gallery">
+                <div className={`fs-slide ${detailPerson.color}`}>
+                  {detailPerson.photoUrl ? (
+                    <img
+                      src={detailPerson.photoUrl}
+                      alt={detailPerson.name}
+                    />
+                  ) : (
+                    <div className="person-avatar large">
+                      {detailPerson.initials}
+                    </div>
+                  )}
+                </div>
+
+                {personPosts.uid === detailPerson.uid &&
+                  personPosts.posts.map((post) => (
+                    <div
+                      className={`fs-slide ${detailPerson.color}`}
+                      key={post.id}
+                    >
+                      <img
+                        src={post.photoUrl}
+                        alt={post.caption || 'Публикация'}
+                        loading="lazy"
+                      />
+                    </div>
+                  ))}
+              </div>
+
+              <div className="fs-fade" />
+            </div>
+
+            <div className="fs-card">
+              <div className="eyebrow">Анкета участника</div>
+
+              <h1 className="fs-name">
+                {detailPerson.name}
+                <span>, {detailPerson.age}</span>
+              </h1>
+
+              <div className="fs-meta">
+                <span className="online-pill">
+                  <i />
+                  {detailPerson.activity}
+                </span>
+
+                <span className="fs-chip">
+                  <MapPin size={12} />
+                  {detailPerson.city}
+                </span>
+
+                {detailMatch && detailMatch.percent > 0 && (
+                  <span className="fs-chip">
+                    <Sparkles size={12} />
+                    {detailMatch.percent}% совпадение
+                  </span>
+                )}
+
+                {detailPerson.username && (
+                  <span className="fs-chip">
+                    <Send size={12} />
+                    @{detailPerson.username}
+                  </span>
+                )}
+              </div>
+
+              <div className="fs-block">
+                <h3>О себе</h3>
+                <p>{detailPerson.bio}</p>
+              </div>
+
+              {detailPerson.interests.length > 0 && (
+                <div className="fs-block">
+                  <h3>Интересы</h3>
+
+                  <div className="tags">
+                    {detailPerson.interests.map((tag) => (
+                      <span
+                        key={tag}
+                        className={
+                          detailMatch?.shared.some(
+                            (shared) => sameInterest(shared, tag)
+                          )
+                            ? 'tag-shared'
+                            : ''
+                        }
+                      >
+                        {tag}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {personPosts.uid === detailPerson.uid &&
+                personPosts.posts.length > 0 && (
+                  <div className="fs-block">
+                    <h3>Публикации</h3>
+
+                    <div className="ig-grid">
+                      {personPosts.posts.map((post) => (
+                        <div className="ig-tile" key={post.id}>
+                          <img
+                            src={post.photoUrl}
+                            alt={post.caption || 'Публикация'}
+                            loading="lazy"
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+            </div>
+          </div>
+
+          <div className="fs-actions">
+            {detailIsMatched ? (
+              detailPerson.username ? (
+                <button
+                  className="primary"
+                  onClick={() => openTelegramChat(detailPerson.username || '')}
+                >
+                  <Send size={16} />
+                  Написать в Telegram
+                </button>
+              ) : (
+                <div className="muted">
+                  У вас взаимный интерес. Username скрыт или не указан.
+                </div>
+              )
+            ) : (
+              <>
+                <button
+                  className="ghost"
+                  onClick={() => void submitSwipe(detailPerson, 'left')}
+                  disabled={swipeLock}
+                  aria-label="Пропустить"
+                >
+                  <X size={18} />
+                </button>
+
+                <button
+                  className="primary"
+                  onClick={() => void submitSwipe(detailPerson, 'right')}
+                  disabled={swipeLock}
+                >
+                  Предложить активность
+                  <Users size={17} />
+                </button>
+              </>
+            )}
+          </div>
         </div>
       )}
 
