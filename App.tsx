@@ -3,7 +3,7 @@ import {
   ArrowRight, ArrowUpRight, Bell, CalendarDays, Check,
   ChevronRight, Compass, MapPin, Plus, Search,
   Settings, Sparkles, Users, UsersRound, UserRound, Send, Music2, Dumbbell,
-  X, Clock3, SlidersHorizontal, LayoutGrid, Trash2, Camera, Star, Gamepad2, Palette, Cpu, ChevronLeft
+  X, Clock3, SlidersHorizontal, LayoutGrid, Trash2, Camera, Star, Gamepad2, Palette, Cpu, ChevronLeft, MessageCircle
 } from 'lucide-react';
 import { firebaseConfigured, storage } from './firebase';
 import { deleteObject, getDownloadURL, ref as storageRef, uploadBytes } from 'firebase/storage';
@@ -17,6 +17,8 @@ import {
   goGetLiveUpdates,
   goCreateClub,
   goGetPosts,
+  goGetEventChat,
+  goSendEventMessage,
   goJoinEvent,
   goMarkNotificationsRead,
   goSaveProfile,
@@ -26,6 +28,7 @@ import {
   type ApiMatch,
   type ApiNotification,
   type ApiPhotoPost,
+  type ApiEventMessage,
   type ApiProfile,
   type GoData,
 } from './goApi';
@@ -617,6 +620,13 @@ export default function App() {
   const [communityClubs, setCommunityClubs] = useState<Club[]>(clubs);
   const [registeredUserCount, setRegisteredUserCount] = useState(0);
   const [initialLoaded, setInitialLoaded] = useState(false);
+  const [initialLoadError, setInitialLoadError] = useState('');
+  const [eventMessages, setEventMessages] = useState<ApiEventMessage[]>([]);
+  const [eventChatDraft, setEventChatDraft] = useState('');
+  const [eventChatLoading, setEventChatLoading] = useState(false);
+  const [eventChatSending, setEventChatSending] = useState(false);
+  const [eventChatError, setEventChatError] = useState('');
+
   const [clubCreateOpen, setClubCreateOpen] = useState(false);
   const [clubCreating, setClubCreating] = useState(false);
   const [clubForm, setClubForm] = useState({
@@ -909,6 +919,7 @@ export default function App() {
       setPhotoPosts(data.photoPosts || []);
       setCommunityClubs((data.clubs || []).map(toClub));
       setRegisteredUserCount(Number(data.totalUsers || 0));
+      setInitialLoadError('');
       setInitialLoaded(true);
 
       if (data.profile) {
@@ -933,7 +944,10 @@ export default function App() {
       }
     } catch (error) {
       console.error('GO data loading error:', error);
-      setNotice(`Не удалось загрузить данные: ${errorMessage(error)}`);
+      const message = `Не удалось загрузить данные: ${errorMessage(error)}`;
+      setInitialLoadError(message);
+      setInitialLoaded(true);
+      setNotice(message);
     } finally {
       setDataLoading(false);
     }
@@ -948,7 +962,7 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authStatus]);
 
-  // Актуализируем мэтчи, анкеты, сообщества и счётчики раз в пять секунд.
+  // Актуализируем данные в фоне раз в 30 секунд.
   useEffect(() => {
     if (authStatus !== 'signed-in' || !initialLoaded) return;
 
@@ -1013,7 +1027,7 @@ export default function App() {
 
     const timer = window.setInterval(
       () => void pullLiveData(),
-      5000
+      30000
     );
 
     document.addEventListener(
@@ -1745,6 +1759,66 @@ export default function App() {
     ? events.find((event) => event.id === detail.id)
     : undefined;
 
+  useEffect(() => {
+    if (
+      detail?.type !== 'event' ||
+      !detailEvent?.joined ||
+      !firebaseConfigured ||
+      authStatus !== 'signed-in' ||
+      detail.id.startsWith('demo-')
+    ) {
+      setEventMessages([]);
+      setEventChatError('');
+      return;
+    }
+
+    let stopped = false;
+    let inFlight = false;
+    const loadMessages = async () => {
+      if (inFlight || stopped) return;
+      inFlight = true;
+      setEventChatLoading(true);
+      try {
+        const result = await goGetEventChat({ eventId: detail.id });
+        if (!stopped) {
+          setEventMessages(result.messages || []);
+          setEventChatError('');
+        }
+      } catch (error) {
+        if (!stopped) setEventChatError(errorMessage(error));
+      } finally {
+        inFlight = false;
+        if (!stopped) setEventChatLoading(false);
+      }
+    };
+
+    void loadMessages();
+    const timer = window.setInterval(() => void loadMessages(), 10000);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, [detail?.type, detail?.id, detailEvent?.joined, authStatus]);
+
+  const sendEventChatMessage = async () => {
+    if (detail?.type !== 'event') return;
+    const text = eventChatDraft.trim();
+    if (!text || eventChatSending) return;
+    setEventChatSending(true);
+    setEventChatError('');
+    try {
+      await goSendEventMessage({ eventId: detail.id, text });
+      setEventChatDraft('');
+      const result = await goGetEventChat({ eventId: detail.id });
+      setEventMessages(result.messages || []);
+    } catch (error) {
+      setEventChatError(errorMessage(error));
+    } finally {
+      setEventChatSending(false);
+    }
+  };
+
+
   const detailClub = detail?.type === 'club'
     ? communityClubs.find((club) => club.id === detail.id)
     : undefined;
@@ -1774,6 +1848,61 @@ export default function App() {
   const detailIsMatched = detailPerson
     ? matchedPeople.some((person) => person.uid === detailPerson.uid)
     : false;
+
+  if (
+    authStatus === 'checking' ||
+    (authStatus === 'signed-in' && !initialLoaded)
+  ) {
+    return (
+      <div className="auth-screen">
+        <div className="auth-glow auth-glow-one" />
+        <div className="auth-glow auth-glow-two" />
+        <div className="auth-content">
+          <div className="auth-logo">G<span>.</span></div>
+          <div className="auth-loader"><i /><i /><i /></div>
+          <h1>GO</h1>
+          <p>{authStatus === 'checking' ? 'Подключаем Telegram' : 'Загружаем твоё пространство'}</p>
+          <span className="auth-caption">События · Сообщества · Новые знакомства</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (authStatus === 'not-in-telegram' || authStatus === 'error') {
+    return (
+      <div className="auth-screen">
+        <div className="auth-glow auth-glow-one" />
+        <div className="auth-glow auth-glow-two" />
+        <div className="auth-content auth-failed">
+          <div className="auth-logo">G<span>.</span></div>
+          <h1>{authStatus === 'not-in-telegram' ? 'Открой GO в Telegram' : 'Не удалось войти'}</h1>
+          <p>{authStatus === 'not-in-telegram'
+            ? 'Авторизация работает внутри Telegram Mini App.'
+            : notice || 'Проверь соединение и попробуй ещё раз.'}</p>
+          <button className="primary auth-retry" onClick={() => window.location.reload()}>
+            Попробовать снова <ArrowRight size={17} />
+          </button>
+          <span className="auth-caption">Твоё пространство начинается здесь</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (initialLoadError) {
+    return (
+      <div className="auth-screen">
+        <div className="auth-glow auth-glow-one" />
+        <div className="auth-content auth-failed">
+          <div className="auth-logo">G<span>.</span></div>
+          <h1>Не загрузились данные</h1>
+          <p>{initialLoadError}</p>
+          <button className="primary auth-retry" onClick={() => window.location.reload()}>
+            Повторить загрузку <ArrowRight size={17} />
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className={`app-shell${kbOpen ? ' kb-open' : ''}`}>
@@ -3212,6 +3341,65 @@ export default function App() {
 
                     <Check size={17} />
                   </button>
+
+                  {detailEvent.joined && (
+                    <section className="event-chat">
+                      <div className="event-chat-heading">
+                        <div>
+                          <span className="eyebrow">ОБЩЕНИЕ УЧАСТНИКОВ</span>
+                          <h2><MessageCircle size={18} /> Чат события</h2>
+                        </div>
+                        <span className="chat-count">{eventMessages.length}</span>
+                      </div>
+                      <div className="event-chat-messages" aria-live="polite">
+                        {eventChatLoading && eventMessages.length === 0 && (
+                          <p className="chat-empty">Загружаем сообщения…</p>
+                        )}
+                        {!eventChatLoading && eventMessages.length === 0 && (
+                          <p className="chat-empty">Пока тихо. Напиши первое сообщение участникам.</p>
+                        )}
+                        {eventMessages.map((message) => (
+                          <article
+                            className={`event-chat-message${message.uid === profile?.uid ? ' own' : ''}`}
+                            key={message.id}
+                          >
+                            <strong>{message.uid === profile?.uid ? 'Ты' : message.name}</strong>
+                            <p>{message.text}</p>
+                            {message.createdAt && (
+                              <time>{new Date(message.createdAt).toLocaleTimeString('ru-RU', {
+                                hour: '2-digit',
+                                minute: '2-digit',
+                              })}</time>
+                            )}
+                          </article>
+                        ))}
+                      </div>
+                      {eventChatError && <p className="chat-error">{eventChatError}</p>}
+                      <form
+                        className="event-chat-compose"
+                        onSubmit={(event) => {
+                          event.preventDefault();
+                          void sendEventChatMessage();
+                        }}
+                      >
+                        <input
+                          value={eventChatDraft}
+                          onChange={(event) => setEventChatDraft(event.target.value)}
+                          placeholder="Сообщение участникам…"
+                          maxLength={500}
+                          aria-label="Сообщение в чате события"
+                        />
+                        <button
+                          type="submit"
+                          className="chat-send"
+                          disabled={!eventChatDraft.trim() || eventChatSending}
+                          aria-label="Отправить сообщение"
+                        >
+                          <Send size={17} />
+                        </button>
+                      </form>
+                    </section>
+                  )}
                 </div>
               </>
             )}
