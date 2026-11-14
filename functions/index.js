@@ -1347,8 +1347,7 @@ exports.goLeaveEvent = onCall(OPTS, safe(async (request) => {
     tx.update(eventRef, {
       participantCount: Math.max(
         0,
-        Number(eventSnap.data().participantCount || 1) - 1
-      ),
+        Number(eventSnap.data().participantCount || 1) - 1      ),
     });
   });
 
@@ -1378,6 +1377,81 @@ exports.goDeleteEvent = onCall(OPTS, safe(async (request) => {
   return { success: true };
 }));
 
+
+
+// ---------- Чаты событий: доступ только действующим участникам ----------
+async function requireEventParticipant(uid, eventId) {
+  const eventRef = db.collection("events").doc(eventId);
+  const [eventSnap, participantSnap] = await Promise.all([
+    eventRef.get(),
+    eventRef.collection("participants").doc(uid).get(),
+  ]);
+
+  if (!eventSnap.exists || eventSnap.data().status !== "published") {
+    throw new HttpsError("not-found", "Событие не найдено");
+  }
+  if (!participantSnap.exists) {
+    throw new HttpsError(
+      "permission-denied",
+      "Чат доступен только участникам события"
+    );
+  }
+  return eventRef;
+}
+
+exports.goGetEventChat = onCall(OPTS, safe(async (request) => {
+  const uid = requireUser(request);
+  const eventId = cleanString(request.data?.eventId, 150);
+  if (!eventId) {
+    throw new HttpsError("invalid-argument", "Не указано событие");
+  }
+
+  const eventRef = await requireEventParticipant(uid, eventId);
+  const snap = await eventRef.collection("messages")
+    .orderBy("createdAt", "desc")
+    .limit(60)
+    .get();
+
+  const messages = snap.docs.reverse().map((doc) => {
+    const data = doc.data();
+    return {
+      id: doc.id,
+      uid: data.uid || "",
+      name: data.name || "Участник",
+      text: data.text || "",
+      createdAt: data.createdAt?.toMillis?.() || null,
+    };
+  });
+
+  return { messages };
+}));
+
+exports.goSendEventMessage = onCall(OPTS, safe(async (request) => {
+  const uid = requireUser(request);
+  const eventId = cleanString(request.data?.eventId, 150);
+  const text = cleanString(request.data?.text, 500);
+
+  if (!eventId || !text) {
+    throw new HttpsError("invalid-argument", "Напиши сообщение");
+  }
+
+  const eventRef = await requireEventParticipant(uid, eventId);
+  const profileSnap = await db.collection("profiles").doc(uid).get();
+  const name = cleanString(
+    profileSnap.exists ? profileSnap.data().name : "Участник",
+    40
+  ) || "Участник";
+
+  const messageRef = eventRef.collection("messages").doc();
+  await messageRef.set({
+    uid,
+    name,
+    text,
+    createdAt: FieldValue.serverTimestamp(),
+  });
+
+  return { success: true, messageId: messageRef.id };
+}));
 
 // ---------- Клубы и сообщества ----------
 exports.goCreateClub = onCall(OPTS, safe(async (request) => {
