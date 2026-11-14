@@ -277,3 +277,21 @@ export const goGetPosts = call<
     posts: ApiPhotoPost[];
   }
 >('goGetPosts');
+
+export type ApiEventMessage = {
+  id: string;
+  uid: string;
+  name: string;
+  text: string;
+  createdAt: number | null;
+};
+
+export const goGetEventChat = call<
+  { eventId: string },
+  { messages: ApiEventMessage[] }
+>('goGetEventChat');
+
+export const goSendEventMessage = call<
+  { eventId: string; text: string },
+  { success: boolean; messageId: string }
+>('goSendEventMessage');
