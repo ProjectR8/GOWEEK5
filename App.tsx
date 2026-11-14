@@ -1758,6 +1758,7 @@ export default function App() {
   const detailEvent = detail?.type === 'event'
     ? events.find((event) => event.id === detail.id)
     : undefined;
+  const detailEventId = detail?.type === 'event' ? detail.id : undefined;
 
   useEffect(() => {
     if (
@@ -1798,7 +1799,7 @@ export default function App() {
       stopped = true;
       window.clearInterval(timer);
     };
-  }, [detail?.type, detail?.id, detailEvent?.joined, authStatus]);
+  }, [detail?.type, detailEventId, detailEvent?.joined, authStatus]);
 
   const sendEventChatMessage = async () => {
     if (detail?.type !== 'event') return;
