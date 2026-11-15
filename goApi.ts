@@ -68,6 +68,9 @@ export type ApiEvent = {
   createdBy: string;
   participantCount: number;
   capacity: number;
+  // Точка на карте; у старых событий её нет.
+  lat?: number | null;
+  lng?: number | null;
   joined: boolean;
   status: string;
 };
@@ -260,6 +263,8 @@ export const goCreateEvent = call<
     time: string;
     place: string;
     capacity?: number;
+    lat?: number;
+    lng?: number;
   },
   {
     success: boolean;
