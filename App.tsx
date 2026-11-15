@@ -1855,52 +1855,82 @@ export default function App() {
     (authStatus === 'signed-in' && !initialLoaded)
   ) {
     return (
-      <div className="auth-screen">
-        <div className="auth-glow auth-glow-one" />
-        <div className="auth-glow auth-glow-two" />
-        <div className="auth-content">
-          <div className="auth-logo">G<span>.</span></div>
+      <div className="auth-screen auth-screen-loading">
+        <div className="auth-orbit auth-orbit-a" />
+        <div className="auth-orbit auth-orbit-b" />
+        <div className="auth-cityline" aria-hidden="true"><i /><i /><i /><i /><i /><i /></div>
+        <div className="auth-grain" aria-hidden="true" />
+        <div className="auth-content auth-content-loading">
+          <div className="auth-brand-lockup">
+            <div className="auth-logo">G<span>.</span></div>
+            <span className="auth-brand-name">GO</span>
+          </div>
           <div className="auth-loader"><i /><i /><i /></div>
-          <h1>GO</h1>
-          <p>{authStatus === 'checking' ? 'Подключаем Telegram' : 'Загружаем твоё пространство'}</p>
-          <span className="auth-caption">События · Сообщества · Новые знакомства</span>
+          <h1>{authStatus === 'checking' ? <>Твой город.<br />Твои люди.</> : <>Собираем<br />твоё пространство.</>}</h1>
+          <p>{authStatus === 'checking' ? 'Подключаемся к Telegram и проверяем защищённую сессию' : 'Загружаем события, сообщества и знакомства'}</p>
+          <div className="auth-progress"><span /></div>
+          <span className="auth-caption">CITY · PEOPLE · EVENTS</span>
         </div>
+        <div className="auth-bottom-note">Место, где планы становятся встречами</div>
       </div>
     );
   }
 
   if (authStatus === 'not-in-telegram' || authStatus === 'error') {
     return (
-      <div className="auth-screen">
-        <div className="auth-glow auth-glow-one" />
-        <div className="auth-glow auth-glow-two" />
-        <div className="auth-content auth-failed">
-          <div className="auth-logo">G<span>.</span></div>
-          <h1>{authStatus === 'not-in-telegram' ? 'Открой GO в Telegram' : 'Не удалось войти'}</h1>
-          <p>{authStatus === 'not-in-telegram'
-            ? 'Авторизация работает внутри Telegram Mini App.'
-            : notice || 'Проверь соединение и попробуй ещё раз.'}</p>
-          <button className="primary auth-retry" onClick={() => window.location.reload()}>
-            Попробовать снова <ArrowRight size={17} />
-          </button>
-          <span className="auth-caption">Твоё пространство начинается здесь</span>
+      <div className="auth-screen auth-screen-entry">
+        <div className="auth-orbit auth-orbit-a" />
+        <div className="auth-orbit auth-orbit-b" />
+        <div className="auth-cityline" aria-hidden="true"><i /><i /><i /><i /><i /><i /></div>
+        <div className="auth-grain" aria-hidden="true" />
+        <div className="auth-entry-top">
+          <div className="auth-mini-brand"><span>G</span><i>.</i> GO</div>
+          <span className="auth-version">ГОРОД В ДВИЖЕНИИ</span>
         </div>
+        <div className="auth-entry-content">
+          <div className="auth-emblem-wrap">
+            <div className="auth-emblem-halo" />
+            <div className="auth-emblem">G<span>.</span></div>
+            <span className="auth-emblem-star">✦</span>
+          </div>
+          <div className="auth-kicker"><span /> ТВОЯ СРЕДА УЖЕ ЗДЕСЬ</div>
+          <h1>{authStatus === 'not-in-telegram' ? <>Город.<br />Люди.<br /><em>События.</em></> : <>Кажется, связь<br />немного <em>потерялась.</em></>}</h1>
+          <p className="auth-entry-description">{authStatus === 'not-in-telegram'
+            ? 'Находи своих, открывай новые места и создавай поводы встретиться.'
+            : notice || 'Не получилось подтвердить вход. Проверь соединение и повтори попытку.'}</p>
+          <div className="auth-feature-row">
+            <span><CalendarDays size={15} /> События</span>
+            <span><UsersRound size={15} /> Сообщества</span>
+            <span><MapPin size={15} /> Рядом</span>
+          </div>
+          <button className="primary auth-retry auth-entry-cta" onClick={() => window.location.reload()}>
+            {authStatus === 'not-in-telegram' ? 'Я открыл GO в Telegram' : 'Попробовать снова'}
+            <span className="auth-cta-arrow"><ArrowRight size={18} /></span>
+          </button>
+          <div className="auth-entry-footnote">{authStatus === 'not-in-telegram' ? 'Открой мини-приложение через Telegram, чтобы войти безопасно.' : 'Твои данные и профиль останутся без изменений.'}</div>
+        </div>
+        <div className="auth-entry-footer"><span>GO<span>.</span></span><i /> CITY · PEOPLE · EVENTS</div>
       </div>
     );
   }
 
   if (initialLoadError) {
     return (
-      <div className="auth-screen">
-        <div className="auth-glow auth-glow-one" />
-        <div className="auth-content auth-failed">
-          <div className="auth-logo">G<span>.</span></div>
-          <h1>Не загрузились данные</h1>
-          <p>{initialLoadError}</p>
-          <button className="primary auth-retry" onClick={() => window.location.reload()}>
-            Повторить загрузку <ArrowRight size={17} />
+      <div className="auth-screen auth-screen-entry">
+        <div className="auth-orbit auth-orbit-a" />
+        <div className="auth-orbit auth-orbit-b" />
+        <div className="auth-grain" aria-hidden="true" />
+        <div className="auth-entry-top"><div className="auth-mini-brand"><span>G</span><i>.</i> GO</div><span className="auth-version">СИНХРОНИЗАЦИЯ</span></div>
+        <div className="auth-entry-content auth-load-error">
+          <div className="auth-error-symbol">!</div>
+          <div className="auth-kicker"><span /> НЕ УДАЛОСЬ ЗАГРУЗИТЬ</div>
+          <h1>Почти<br /><em>на месте.</em></h1>
+          <p className="auth-entry-description">{initialLoadError}</p>
+          <button className="primary auth-retry auth-entry-cta" onClick={() => window.location.reload()}>
+            Повторить загрузку <span className="auth-cta-arrow"><ArrowRight size={18} /></span>
           </button>
         </div>
+        <div className="auth-entry-footer"><span>GO<span>.</span></span><i /> CITY · PEOPLE · EVENTS</div>
       </div>
     );
   }
