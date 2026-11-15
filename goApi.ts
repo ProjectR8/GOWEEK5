@@ -377,3 +377,51 @@ export const errorCode = (error: unknown) =>
   error && typeof error === 'object' && 'code' in error
     ? String((error as { code?: unknown }).code || '').replace(/^functions\//, '')
     : '';
+
+// ---------- Общий чат ----------
+
+export type ApiGlobalChat = {
+  messages: ApiGroupMessage[];
+  hasMore: boolean;
+  latestSeq: number;
+};
+
+export const goGetGlobalChat = call<
+  {
+    limit?: number;
+  },
+  ApiGlobalChat
+>('goGetGlobalChat');
+
+export const goGetGlobalMessages = call<
+  {
+    afterSeq?: number;
+    beforeSeq?: number;
+    limit?: number;
+  },
+  ApiMessagesPage
+>('goGetGlobalMessages');
+
+export const goSendGlobalMessage = call<
+  {
+    text: string;
+    clientId: string;
+  },
+  {
+    success: boolean;
+    message: ApiGroupMessage;
+  }
+>('goSendGlobalMessage');
+
+// ---------- Публичный профиль любого участника ----------
+
+export const goGetUserProfile = call<
+  {
+    targetUid: string;
+  },
+  {
+    profile: ApiProfile;
+    matched: boolean;
+    posts: ApiPhotoPost[];
+  }
+>('goGetUserProfile');
