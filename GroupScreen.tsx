@@ -242,10 +242,16 @@ export default function GroupScreen({
           return;
         }
 
-        setLoadError(
+        const raw =
           error && typeof error === 'object' && 'message' in error
             ? String((error as { message?: unknown }).message)
-            : 'Не удалось открыть группу'
+            : '';
+
+        // «internal» приходит и когда функции чата ещё не задеплоены на сервер.
+        setLoadError(
+          code === 'internal' || raw === 'internal' || !raw
+            ? 'Сервер чатов не отвечает. Проверь соединение. Если ты разработчик — убедись, что functions задеплоены (firebase deploy --only functions).'
+            : raw
         );
       });
 
