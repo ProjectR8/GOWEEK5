@@ -3,6 +3,7 @@ const { defineSecret } = require("firebase-functions/params");
 const admin = require("firebase-admin");
 const { getFirestore, FieldValue } = require("firebase-admin/firestore");
 const crypto = require("crypto");
+const { createEventHandlers } = require("./goEvents");
 
 admin.initializeApp();
 
@@ -111,6 +112,17 @@ function targetUidOf(request) {
 
   return targetUid;
 }
+
+// Обработчики событий и групп (join/leave/delete, участники, чат).
+const eventHandlers = createEventHandlers({
+  db,
+  FieldValue,
+  HttpsError,
+  requireUser,
+  cleanString,
+  ageGroup,
+});
+
 
 // Публичный вид анкеты. username показывается только при взаимной симпатии.
 const pub = (id, data, reveal) => ({
@@ -516,32 +528,7 @@ exports.goGetData = onCall(OPTS, safe(async (request) => {
       mutual: mutual(snap.id),
     }));
 
-  const events = await Promise.all(
-    eventsSnap.docs.map(async (doc) => {
-      const event = doc.data();
-
-      const participant = await doc.ref
-        .collection("participants")
-        .doc(uid)
-        .get();
-
-      return {
-        id: doc.id,
-        title: event.title || "Без названия",
-        description: event.description || "",
-        category: event.category || "Встреча",
-        date: event.date || "",
-        time: event.time || "",
-        place: event.place || "",
-        city: event.city || "",
-        createdBy: event.createdBy || "",
-        participantCount: Number(event.participantCount || 0),
-        capacity: Number(event.capacity || 30),
-        joined: participant.exists,
-        status: event.status || "published",
-      };
-    })
-  );
+  const events = await eventHandlers.eventRows(eventsSnap.docs, uid);
 
   const [photoPostsSnap, matches] = await Promise.all([
     db.collection("profiles")
@@ -683,32 +670,7 @@ exports.goGetLiveUpdates = onCall(OPTS, safe(async (request) => {
         .map((doc) => pub(doc.id, doc.data(), mutual(doc.id)))
     : [];
 
-  const events = await Promise.all(
-    eventsSnap.docs.map(async (doc) => {
-      const data = doc.data();
-
-      const participant = await doc.ref
-        .collection("participants")
-        .doc(uid)
-        .get();
-
-      return {
-        id: doc.id,
-        title: data.title || "Без названия",
-        description: data.description || "",
-        category: data.category || "Встреча",
-        date: data.date || "",
-        time: data.time || "",
-        place: data.place || "",
-        city: data.city || "",
-        createdBy: data.createdBy || "",
-        participantCount: Number(data.participantCount || 0),
-        capacity: Number(data.capacity || 30),
-        joined: participant.exists,
-        status: data.status || "published",
-      };
-    })
-  );
+  const events = await eventHandlers.eventRows(eventsSnap.docs, uid);
 
   const notifications = notifSnap.docs
     .map((doc) => {
@@ -737,7 +699,56 @@ exports.goGetLiveUpdates = onCall(OPTS, safe(async (request) => {
     clubs: clubData.clubs,
     totalUsers: Number(userCountSnap.data().count || 0),
   };
-}));// ---------- Профиль ----------
+}));
+
+
+// ---------- Лёгкий «пульс» для открытого Mini App ----------
+// Заменяет тяжёлый goGetLiveUpdates: только события, уведомления и число совпадений.
+// Анкеты, свайпы и клубы здесь не читаются — они обновляются полной загрузкой.
+exports.goGetPulse = onCall(OPTS, safe(async (request) => {
+  const uid = requireUser(request);
+
+  const [eventsSnap, notifSnap, matchCountSnap] = await Promise.all([
+    db.collection("events")
+      .where("status", "==", "published")
+      .limit(100)
+      .get(),
+
+    db.collection("notifications")
+      .where("recipientUid", "==", uid)
+      .limit(100)
+      .get(),
+
+    db.collection("matches")
+      .where("memberUids", "array-contains", uid)
+      .count()
+      .get(),
+  ]);
+
+  const notifications = notifSnap.docs
+    .map((doc) => {
+      const data = doc.data();
+
+      return {
+        id: doc.id,
+        type: data.type || "general",
+        title: data.title || "Уведомление",
+        text: data.text || "",
+        read: data.read === true,
+        createdAt: data.createdAt?.toMillis?.() ?? null,
+      };
+    })
+    .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+
+  return {
+    events: await eventHandlers.eventRows(eventsSnap.docs, uid),
+    notifications,
+    matchCount: Number(matchCountSnap.data().count || 0),
+  };
+}));
+
+
+// ---------- Профиль ----------
 exports.goSaveProfile = onCall(OPTS, safe(async (request) => {
   const uid = requireUser(request);
   const data = request.data || {};
@@ -1209,249 +1220,29 @@ exports.goReport = onCall(OPTS, safe(async (request) => {
 }));
 
 
-// ---------- События ----------
-exports.goCreateEvent = onCall(OPTS, safe(async (request) => {
-  const uid = requireUser(request);
-  const data = request.data || {};
-
-  const title = cleanString(data.title, 70);
-  const description = cleanString(data.description, 500);
-  const category = cleanString(data.category || "Встреча", 30);
-  const date = cleanString(data.date, 20);
-  const time = cleanString(data.time, 10);
-  const place = cleanString(data.place, 100);
-  const capacity = Math.max(
-    2,
-    Math.min(200, Math.round(Number(data.capacity)) || 30)
-  );
-
-  if (!title || !description || !date || !time || !place) {
-    throw new HttpsError(
-      "invalid-argument",
-      "Заполни все поля события"
-    );
-  }
-
-  const creator = await db.collection("profiles").doc(uid).get();
-  const city = creator.exists
-    ? cleanString(creator.data().city, 60)
-    : "";
-
-  const eventRef = db.collection("events").doc();
-  const batch = db.batch();
-
-  batch.set(eventRef, {
-    title,
-    description,
-    category,
-    date,
-    time,
-    place,
-    city,
-    capacity,
-    createdBy: uid,
-    participantCount: 1,
-    status: "published",
-    createdAt: FieldValue.serverTimestamp(),
-  });
-
-  batch.set(
-    eventRef.collection("participants").doc(uid),
-    {
-      joinedAt: FieldValue.serverTimestamp(),
-    }
-  );
-
-  await batch.commit();
-
-  return {
-    success: true,
-    eventId: eventRef.id,
-  };
-}));
+// ---------- События и группы событий ----------
+// Логика вынесена в goEvents.js (транзакции, проверка прав, чат).
+exports.goCreateEvent = onCall(OPTS, safe(eventHandlers.goCreateEvent));
 
 exports.goJoinEvent = onCall(
   { ...OPTS, maxInstances: 30 },
-  safe(async (request) => {
-    const uid = requireUser(request);
-    const eventId = cleanString(request.data?.eventId, 150);
-
-    if (!eventId) {
-      throw new HttpsError("invalid-argument", "Не указано событие");
-    }
-
-    const eventRef = db.collection("events").doc(eventId);
-    const participantRef = eventRef.collection("participants").doc(uid);
-
-    const joined = await db.runTransaction(async (tx) => {
-      const [eventSnap, participantSnap] = await Promise.all([
-        tx.get(eventRef),
-        tx.get(participantRef),
-      ]);
-
-      if (!eventSnap.exists || eventSnap.data().status !== "published") {
-        throw new HttpsError("not-found", "Событие не найдено");
-      }
-
-      if (participantSnap.exists) return false;
-
-      const count = Number(eventSnap.data().participantCount || 0);
-      const capacity = Number(eventSnap.data().capacity || 30);
-
-      if (count >= capacity) {
-        throw new HttpsError(
-          "failed-precondition",
-          "Свободных мест больше нет"
-        );
-      }
-
-      tx.set(participantRef, {
-        joinedAt: FieldValue.serverTimestamp(),
-      });
-
-      tx.update(eventRef, {
-        participantCount: count + 1,
-      });
-
-      return true;
-    });
-
-    return {
-      success: true,
-      joined,
-    };
-  })
+  safe(eventHandlers.goJoinEvent)
 );
 
-exports.goLeaveEvent = onCall(OPTS, safe(async (request) => {
-  const uid = requireUser(request);
-  const eventId = cleanString(request.data?.eventId, 150);
+exports.goLeaveEvent = onCall(OPTS, safe(eventHandlers.goLeaveEvent));
+exports.goDeleteEvent = onCall(OPTS, safe(eventHandlers.goDeleteEvent));
 
-  if (!eventId) {
-    throw new HttpsError("invalid-argument", "Не указано событие");
-  }
+exports.goGetEventGroup = onCall(OPTS, safe(eventHandlers.goGetEventGroup));
+exports.goGetEventMembers = onCall(OPTS, safe(eventHandlers.goGetEventMembers));
+exports.goGetEventMessages = onCall(
+  { ...OPTS, maxInstances: 30 },
+  safe(eventHandlers.goGetEventMessages)
+);
+exports.goSendEventMessage = onCall(
+  { ...OPTS, maxInstances: 30 },
+  safe(eventHandlers.goSendEventMessage)
+);
 
-  const eventRef = db.collection("events").doc(eventId);
-  const participantRef = eventRef.collection("participants").doc(uid);
-
-  await db.runTransaction(async (tx) => {
-    const [eventSnap, participantSnap] = await Promise.all([
-      tx.get(eventRef),
-      tx.get(participantRef),
-    ]);
-
-    if (!eventSnap.exists || !participantSnap.exists) return;
-
-    tx.delete(participantRef);
-
-    tx.update(eventRef, {
-      participantCount: Math.max(
-        0,
-        Number(eventSnap.data().participantCount || 1) - 1      ),
-    });
-  });
-
-  return { success: true };
-}));
-
-exports.goDeleteEvent = onCall(OPTS, safe(async (request) => {
-  const uid = requireUser(request);
-  const eventId = cleanString(request.data?.eventId, 150);
-  const ref = db.collection("events").doc(eventId || "_");
-
-  const snap = await ref.get();
-
-  if (!snap.exists) {
-    throw new HttpsError("not-found", "Событие не найдено");
-  }
-
-  if (snap.data().createdBy !== uid) {
-    throw new HttpsError(
-      "permission-denied",
-      "Удалить может только организатор"
-    );
-  }
-
-  await ref.update({ status: "deleted" });
-
-  return { success: true };
-}));
-
-
-
-// ---------- Чаты событий: доступ только действующим участникам ----------
-async function requireEventParticipant(uid, eventId) {
-  const eventRef = db.collection("events").doc(eventId);
-  const [eventSnap, participantSnap] = await Promise.all([
-    eventRef.get(),
-    eventRef.collection("participants").doc(uid).get(),
-  ]);
-
-  if (!eventSnap.exists || eventSnap.data().status !== "published") {
-    throw new HttpsError("not-found", "Событие не найдено");
-  }
-  if (!participantSnap.exists) {
-    throw new HttpsError(
-      "permission-denied",
-      "Чат доступен только участникам события"
-    );
-  }
-  return eventRef;
-}
-
-exports.goGetEventChat = onCall(OPTS, safe(async (request) => {
-  const uid = requireUser(request);
-  const eventId = cleanString(request.data?.eventId, 150);
-  if (!eventId) {
-    throw new HttpsError("invalid-argument", "Не указано событие");
-  }
-
-  const eventRef = await requireEventParticipant(uid, eventId);
-  const snap = await eventRef.collection("messages")
-    .orderBy("createdAt", "desc")
-    .limit(60)
-    .get();
-
-  const messages = snap.docs.reverse().map((doc) => {
-    const data = doc.data();
-    return {
-      id: doc.id,
-      uid: data.uid || "",
-      name: data.name || "Участник",
-      text: data.text || "",
-      createdAt: data.createdAt?.toMillis?.() || null,
-    };
-  });
-
-  return { messages };
-}));
-
-exports.goSendEventMessage = onCall(OPTS, safe(async (request) => {
-  const uid = requireUser(request);
-  const eventId = cleanString(request.data?.eventId, 150);
-  const text = cleanString(request.data?.text, 500);
-
-  if (!eventId || !text) {
-    throw new HttpsError("invalid-argument", "Напиши сообщение");
-  }
-
-  const eventRef = await requireEventParticipant(uid, eventId);
-  const profileSnap = await db.collection("profiles").doc(uid).get();
-  const name = cleanString(
-    profileSnap.exists ? profileSnap.data().name : "Участник",
-    40
-  ) || "Участник";
-
-  const messageRef = eventRef.collection("messages").doc();
-  await messageRef.set({
-    uid,
-    name,
-    text,
-    createdAt: FieldValue.serverTimestamp(),
-  });
-
-  return { success: true, messageId: messageRef.id };
-}));
 
 // ---------- Клубы и сообщества ----------
 exports.goCreateClub = onCall(OPTS, safe(async (request) => {
