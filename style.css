@@ -2006,21 +2006,6 @@ body::before {
 .join-pill.on { background: transparent; color: var(--lavender); }
 .community-add-button { min-height: 46px; margin-top: 0; }
 
-/* Profile (по референсу: по центру) */
-.ig-profile .ig-head { flex-direction: column; align-items: center; gap: 18px; text-align: center; }
-.ig-profile .ig-avatar-ring { width: 124px; height: 124px; }
-.ig-profile .ig-stats { width: 100%; justify-content: space-around; }
-.ig-profile .ig-stats > div { display: grid; justify-items: center; gap: 2px; }
-.ig-profile .ig-stats b { font-size: 22px; }
-.ig-profile .ig-bio { text-align: center; }
-.ig-profile .ig-bio h1 { font-family: var(--serif); font-size: 26px; }
-.ig-profile .ig-city { justify-content: center; }
-.ig-profile .tags { justify-content: center; }
-.ig-username { color: var(--muted); font-size: 14px; margin: -4px 0 4px; }
-.ig-tabs { display: flex; margin: 8px 0 14px; border-bottom: 1px solid var(--border); }
-.ig-tabs button { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 12px 0; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--muted); font-size: 13px; font-weight: 800; }
-.ig-tabs button.on { color: #fff; border-bottom-color: var(--violet); }
-
 /* Intro / welcome */
 .intro { position: fixed; inset: 0; z-index: 190; display: flex; flex-direction: column; justify-content: space-between; padding: calc(28px + var(--sat)) 24px calc(28px + var(--sab)); overflow: hidden; background: var(--bg); }
 .intro-bg { position: absolute; inset: 0; background: radial-gradient(70% 50% at 90% 55%, rgba(139, 92, 246, .55), transparent 70%), radial-gradient(60% 40% at 0% 100%, rgba(109, 63, 224, .45), transparent 70%), linear-gradient(180deg, #0b0519, var(--bg)); }
@@ -2033,3 +2018,64 @@ body::before {
 
 /* Splash: как в референсе */
 .splash-tag { font-size: 14px; }
+
+/* ---------- 16. FIXES + ACCENTS ---------- */
+
+:root {
+  --cyan: #67e8f9;
+  --mint: #5eead4;
+  --pink: #f472b6;
+  --amber: #fbbf24;
+  --magenta: #d946ef;
+}
+
+/* шапка снова с фоном, иначе карточки заезжают под логотип */
+.topbar { background: rgba(7, 3, 15, .82); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); border-bottom: 1px solid rgba(221, 214, 254, .08); }
+.lite .topbar { background: rgba(7, 3, 15, .97); }
+.main-content { padding-top: 6px; }
+
+/* карточка события */
+.hero-track { padding-bottom: 6px; }
+.event-tile.hero .event-body { align-items: stretch; }
+.hero-cta { align-self: flex-end; justify-self: auto; border: 0; background: linear-gradient(135deg, #8b5cf6, var(--magenta)); box-shadow: 0 8px 22px rgba(217, 70, 239, .4); }
+.date-badge span { color: var(--amber); }
+.date-badge b { color: #fff; }
+.hero-line svg { color: var(--cyan); }
+
+/* акцентные цвета по категориям: --ev задаётся в EventRow */
+.event-row { box-shadow: var(--glass-hi), inset 3px 0 0 -1px var(--ev, var(--violet)); }
+.event-row-art { box-shadow: 0 0 0 1px rgba(255, 255, 255, .12), 0 6px 18px -6px var(--ev, var(--violet)); }
+.event-row-body small svg { color: var(--ev, var(--lavender)); }
+.event-row-people em { color: var(--mint); }
+.text-button { color: var(--cyan); }
+.section-heading h2 { color: #fff; }
+
+.chip.on { background: linear-gradient(135deg, #8b5cf6, var(--magenta)); box-shadow: 0 6px 18px rgba(217, 70, 239, .35); }
+
+.ep-cta { background: linear-gradient(135deg, #8b5cf6, var(--magenta)); box-shadow: 0 12px 30px rgba(217, 70, 239, .4), inset 0 1px 0 rgba(255, 255, 255, .3); }
+.ep-facts svg, .ep-row svg { color: var(--cyan); }
+.ep-tabs button.on { border-bottom-color: var(--magenta); }
+.ep-body .eyebrow { color: var(--amber); }
+.fill-bar i { background: linear-gradient(90deg, var(--mint), var(--cyan)); }
+
+.join-pill { background: rgba(94, 234, 212, .16); border-color: rgba(94, 234, 212, .5); color: #a7f5e8; }
+.join-pill.on { background: transparent; color: var(--mint); border-color: rgba(94, 234, 212, .35); }
+.community-thumb-icon { background: rgba(10, 6, 19, .45); }
+
+.avatar-stack .as-2 { background: linear-gradient(135deg, #2dd4bf, #0891b2); }
+.avatar-stack b { color: var(--cyan); }
+
+.bottom-nav button.nav-create .nav-icon { background: linear-gradient(135deg, #8b5cf6, var(--magenta)); box-shadow: 0 8px 22px rgba(217, 70, 239, .4); }
+.bottom-nav button.active { color: #fff; }
+.bottom-nav button.active .nav-icon svg { color: var(--cyan); }
+.notif-dot { background: var(--pink); }
+
+.chat-row.mine .chat-bubble { background: linear-gradient(135deg, #7c3aed, #c026d3); }
+.chat-send { background: linear-gradient(135deg, #8b5cf6, var(--magenta)); }
+.group-tabs button.on { background: linear-gradient(135deg, #8b5cf6, var(--magenta)); }
+.g-badge { color: var(--amber); }
+
+.intro-bg { background: radial-gradient(70% 50% at 90% 55%, rgba(139, 92, 246, .55), transparent 70%), radial-gradient(50% 36% at 0% 20%, rgba(217, 70, 239, .28), transparent 70%), radial-gradient(60% 40% at 0% 100%, rgba(45, 212, 191, .18), transparent 70%), linear-gradient(180deg, #0b0519, var(--bg)); }
+.intro-cta { background: linear-gradient(135deg, #8b5cf6, var(--magenta)); }
+.splash-orb { background: radial-gradient(circle, rgba(217, 70, 239, .32), rgba(139, 92, 246, .3) 45%, transparent 70%); }
+body::before { background: radial-gradient(46% 30% at 100% 6%, rgba(139, 92, 246, .38), transparent 70%), radial-gradient(40% 26% at 0% 38%, rgba(217, 70, 239, .16), transparent 72%), radial-gradient(60% 34% at 70% 100%, rgba(45, 212, 191, .12), transparent 72%), linear-gradient(180deg, #0b0519, var(--bg) 55%); }
