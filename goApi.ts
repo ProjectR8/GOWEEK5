@@ -72,6 +72,52 @@ export type ApiEvent = {
   status: string;
 };
 
+export type GroupRole = 'organizer' | 'member';
+
+export type ApiGroupMember = {
+  uid: string;
+  name: string;
+  photoUrl: string;
+  role: GroupRole;
+  joinedAt: number | null;
+};
+
+export type ApiGroupMessage = {
+  id: string;
+  seq: number;
+  uid: string;
+  name: string;
+  photoUrl: string;
+  text: string;
+  createdAt: number | null;
+  clientId: string;
+  role: GroupRole;
+};
+
+export type ApiGroupEvent = Omit<ApiEvent, 'joined'>;
+
+export type ApiEventGroup = {
+  event: ApiGroupEvent;
+  role: GroupRole;
+  members: ApiGroupMember[];
+  messages: ApiGroupMessage[];
+  hasMore: boolean;
+  latestSeq: number;
+};
+
+export type ApiMessagesPage = {
+  messages: ApiGroupMessage[];
+  hasMore: boolean;
+  latestSeq: number;
+  participantCount: number;
+};
+
+export type GoPulse = {
+  events: ApiEvent[];
+  notifications: ApiNotification[];
+  matchCount: number;
+};
+
 export type GoData = {
   profile: ApiProfile | null;
   people: ApiProfile[];
@@ -228,6 +274,7 @@ export const goJoinEvent = call<
   {
     success: boolean;
     joined: boolean;
+    participantCount: number;
   }
 >('goJoinEvent');
 
@@ -237,6 +284,8 @@ export const goLeaveEvent = call<
   },
   {
     success: boolean;
+    left: boolean;
+    participantCount: number;
   }
 >('goLeaveEvent');
 
@@ -277,21 +326,54 @@ export const goGetPosts = call<
     posts: ApiPhotoPost[];
   }
 >('goGetPosts');
+// ---------- Группы событий ----------
 
-export type ApiEventMessage = {
-  id: string;
-  uid: string;
-  name: string;
-  text: string;
-  createdAt: number | null;
-};
+export const goGetPulse = () =>
+  call<Record<string, never>, GoPulse>('goGetPulse')({});
 
-export const goGetEventChat = call<
-  { eventId: string },
-  { messages: ApiEventMessage[] }
->('goGetEventChat');
+export const goGetEventGroup = call<
+  {
+    eventId: string;
+    limit?: number;
+  },
+  ApiEventGroup
+>('goGetEventGroup');
+
+export const goGetEventMembers = call<
+  {
+    eventId: string;
+  },
+  {
+    event: ApiGroupEvent;
+    role: GroupRole;
+    members: ApiGroupMember[];
+  }
+>('goGetEventMembers');
+
+export const goGetEventMessages = call<
+  {
+    eventId: string;
+    afterSeq?: number;
+    beforeSeq?: number;
+    limit?: number;
+  },
+  ApiMessagesPage
+>('goGetEventMessages');
 
 export const goSendEventMessage = call<
-  { eventId: string; text: string },
-  { success: boolean; messageId: string }
+  {
+    eventId: string;
+    text: string;
+    clientId: string;
+  },
+  {
+    success: boolean;
+    message: ApiGroupMessage;
+  }
 >('goSendEventMessage');
+
+// Код ошибки callable-функции (permission-denied, not-found ...).
+export const errorCode = (error: unknown) =>
+  error && typeof error === 'object' && 'code' in error
+    ? String((error as { code?: unknown }).code || '').replace(/^functions\//, '')
+    : '';
