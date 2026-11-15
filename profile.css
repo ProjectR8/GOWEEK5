@@ -76,30 +76,22 @@
   color: var(--lavender);
 }
 
-.ig-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
+.ig-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 2px; margin: 0 -2px; }
 
 .ig-tile {
   position: relative;
-  aspect-ratio: 1;
+  aspect-ratio: 1 / 1;
   padding: 0;
   overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: 12px;
+  border: 0;
+  border-radius: 0;
   background: var(--panel);
+  content-visibility: auto;
+  contain-intrinsic-size: 120px;
 }
 
-.ig-tile img { display: block; width: 100%; height: 100%; object-fit: cover; transition: transform .25s var(--ease); }
-.ig-tile:active img { transform: scale(1.05); }
-
-.ig-tile-loading {
-  display: grid;
-  place-items: center;
-  color: var(--muted);
-  font-size: 26px;
-  animation: ig-pulse 1s infinite alternate;
-}
-
-@keyframes ig-pulse { to { opacity: .3; } }
+.ig-tile img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.ig-tile:active img { opacity: .85; }
 
 .ig-empty {
   display: grid;
