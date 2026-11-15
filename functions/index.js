@@ -301,9 +301,8 @@ async function getMatchRows(uid, me, matchesSnap) {
     const data = snap.data();
 
     // tgData — актуальный источник Telegram username.
-    const currentUsername = tgUidSet.has(snap.id)
-      ? tgByUid.get(snap.id)
-      : (data.tgUsername || "");
+    const currentUsername =
+      tgByUid.get(snap.id) || data.tgUsername || "";
 
     byUid.set(
       snap.id,
