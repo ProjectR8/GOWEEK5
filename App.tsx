@@ -21,6 +21,7 @@ import {
   goDeleteEvent,
   goCreateClub,
   goGetPosts,
+  goGetUserProfile,
   goJoinEvent,
   goMarkNotificationsRead,
   goSaveProfile,
@@ -891,6 +892,9 @@ export default function App() {
   const [bootError, setBootError] = useState('');
   const [bootNonce, setBootNonce] = useState(0);
   const [groupId, setGroupId] = useState<string | null>(null);
+  const [globalChatOpen, setGlobalChatOpen] = useState(false);
+  // Анкеты, которых нет в загруженных списках (открыты из чата и т.п.).
+  const [remotePeople, setRemotePeople] = useState<Record<string, Person>>({});
   const [heroIdx, setHeroIdx] = useState(0);
   const [eventTab, setEventTab] = useState<'about' | 'members'>('about');
   const [eventMenu, setEventMenu] = useState(false);
@@ -1398,6 +1402,11 @@ export default function App() {
     const handleBack = () => {
       if (confirm) {
         if (!confirmBusy) setConfirm(null);
+      } else if (detail?.type === 'person' && (groupId || globalChatOpen)) {
+        // Анкета открыта поверх чата: сначала закрываем её.
+        setDetail(null);
+      } else if (globalChatOpen) {
+        setGlobalChatOpen(false);
       } else if (groupId) {
         setGroupId(null);
       } else if (notificationsOpen) {
@@ -1419,6 +1428,7 @@ export default function App() {
     if (
       confirm ||
       groupId ||
+      globalChatOpen ||
       detail ||
       notificationsOpen ||
       viewPost ||
@@ -1433,7 +1443,7 @@ export default function App() {
     tg.BackButton.onClick(handleBack);
 
     return () => tg.BackButton.offClick(handleBack);
-  }, [detail, notificationsOpen, viewPost, eventsOpen, createStarted, tab, groupId, confirm, confirmBusy]);
+  }, [detail, notificationsOpen, viewPost, eventsOpen, createStarted, tab, groupId, globalChatOpen, confirm, confirmBusy]);
 
   const changeTab = (next: Tab) => {
     setTab(next);
@@ -2179,6 +2189,14 @@ export default function App() {
   };
 
   const openPerson = (uid: string) => {
+    // Свою анкету открываем во вкладке «Профиль».
+    if (uid === profile?.uid) {
+      setGroupId(null);
+      setGlobalChatOpen(false);
+      changeTab('profile');
+      return;
+    }
+
     setDetail({
       type: 'person',
       uid,
@@ -2189,7 +2207,13 @@ export default function App() {
       posts: [],
     });
 
-    if (uid.startsWith('tg_') && authStatus === 'signed-in') {
+    if (!uid.startsWith('tg_') || authStatus !== 'signed-in') return;
+
+    const known =
+      allPeople.some((person) => person.uid === uid) ||
+      people.some((person) => person.uid === uid);
+
+    if (known) {
       goGetPosts({ targetUid: uid })
         .then((result) => {
           setPersonPosts({
@@ -2198,7 +2222,30 @@ export default function App() {
           });
         })
         .catch(() => undefined);
+
+      return;
     }
+
+    // Человека нет в загруженных списках: берём анкету и фото с сервера.
+    goGetUserProfile({ targetUid: uid })
+      .then((result) => {
+        setRemotePeople((old) => ({
+          ...old,
+          [uid]: toPerson(result.profile),
+        }));
+
+        setPersonPosts({
+          uid,
+          posts: result.posts || [],
+        });
+      })
+      .catch(() => {
+        setDetail((current) =>
+          current?.type === 'person' && current.uid === uid ? null : current
+        );
+
+        setNotice('Анкета недоступна');
+      });
   };
 
   const openEvent = (id: string) => {
@@ -2252,7 +2299,8 @@ export default function App() {
 
   const detailPerson = detail?.type === 'person'
     ? allPeople.find((person) => person.uid === detail.uid) ||
-      people.find((person) => person.uid === detail.uid)
+      people.find((person) => person.uid === detail.uid) ||
+      remotePeople[detail.uid]
     : undefined;
 
   const detailEvent = detail?.type === 'event'
@@ -2504,6 +2552,24 @@ export default function App() {
                   Создать событие
                 </button>
               </div>
+            )}
+
+            {authStatus === 'signed-in' && profile && (
+              <button
+                className="global-chat-card"
+                onClick={() => setGlobalChatOpen(true)}
+              >
+                <span className="global-chat-icon">
+                  <MessageCircle size={20} />
+                </span>
+
+                <span className="global-chat-text">
+                  <b>Общий чат GO</b>
+                  <small>Общайся со всеми участниками</small>
+                </span>
+
+                <ChevronRight size={18} />
+              </button>
             )}
 
             <div className="quick-actions">
@@ -3730,6 +3796,7 @@ export default function App() {
             }}
             onLeave={() => setConfirm({ kind: 'leave', id: groupId })}
             onDelete={() => setConfirm({ kind: 'delete', id: groupId })}
+            onOpenProfile={openPerson}
             onCountChange={(eventId, count) =>
               setEvents((old) =>
                 old.map((event) =>
@@ -3739,6 +3806,32 @@ export default function App() {
                 )
               )
             }
+          />
+        </Suspense>
+      )}
+
+      {globalChatOpen && profile && (
+        <Suspense
+          fallback={
+            <div className="group-screen">
+              <div className="group-state">Загрузка…</div>
+            </div>
+          }
+        >
+          <GroupScreen
+            global
+            eventId="global"
+            fallbackTitle="Общий чат"
+            me={profile}
+            onClose={() => setGlobalChatOpen(false)}
+            onAccessLost={(message) => {
+              setGlobalChatOpen(false);
+              setNotice(message);
+            }}
+            onLeave={() => undefined}
+            onDelete={() => undefined}
+            onCountChange={() => undefined}
+            onOpenProfile={openPerson}
           />
         </Suspense>
       )}
@@ -4074,7 +4167,7 @@ export default function App() {
       )}
 
       {detail?.type === 'person' && detailPerson && (
-        <div className="fs-screen" role="dialog" aria-modal="true">
+        <div className="fs-screen person-screen" role="dialog" aria-modal="true">
           <button
             className="fs-back"
             onClick={() => setDetail(null)}
