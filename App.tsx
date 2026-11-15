@@ -789,7 +789,11 @@ function EventRow({
   onOpen: (id: string) => void;
 }) {
   return (
-    <button className="event-row" onClick={() => onOpen(event.id)}>
+    <button
+      className="event-row"
+      style={{ ['--ev' as string]: artFor(event.category).glow }}
+      onClick={() => onOpen(event.id)}
+    >
       <span className="event-row-art">
         <EventArt category={event.category} />
       </span>
@@ -890,7 +894,6 @@ export default function App() {
   const [heroIdx, setHeroIdx] = useState(0);
   const [eventTab, setEventTab] = useState<'about' | 'members'>('about');
   const [eventMenu, setEventMenu] = useState(false);
-  const [profileTab, setProfileTab] = useState<'posts' | 'events'>('posts');
   const [clubCat, setClubCat] = useState('Все');
   const [introSeen, setIntroSeen] = useState(() => {
     try {
@@ -1669,7 +1672,7 @@ export default function App() {
       setEvents((old) =>
         old.map((event) =>
           event.id === eventId
-            ? withJoin(event, true, result.participantCount)
+            ? withJoin(event, true, Number.isFinite(result.participantCount) ? result.participantCount : event.participantCount)
             : event
         )
       );
@@ -1715,7 +1718,7 @@ export default function App() {
       setEvents((old) =>
         old.map((event) =>
           event.id === eventId
-            ? withJoin(event, false, result.participantCount)
+            ? withJoin(event, false, Number.isFinite(result.participantCount) ? result.participantCount : event.participantCount - 1)
             : event
         )
       );
@@ -3425,10 +3428,6 @@ export default function App() {
                     {profile.name}, {profile.age}
                   </h1>
 
-                  {profile.username && (
-                    <div className="ig-username">@{profile.username}</div>
-                  )}
-
                   {profile.city && (
                     <div className="ig-city">
                       <MapPin size={13} />
@@ -3470,54 +3469,10 @@ export default function App() {
                   </button>
                 </div>
 
-                <div className="ig-tabs" role="tablist">
-                  <button
-                    role="tab"
-                    aria-selected={profileTab === 'posts'}
-                    className={profileTab === 'posts' ? 'on' : ''}
-                    onClick={() => setProfileTab('posts')}
-                  >
-                    <LayoutGrid size={16} />
-                    Публикации
-                  </button>
-
-                  <button
-                    role="tab"
-                    aria-selected={profileTab === 'events'}
-                    className={profileTab === 'events' ? 'on' : ''}
-                    onClick={() => setProfileTab('events')}
-                  >
-                    <CalendarDays size={16} />
-                    Мои события
-                  </button>
+                <div className="ig-tab">
+                  <LayoutGrid size={20} />
                 </div>
 
-                {profileTab === 'events' ? (
-                  events.filter((event) => event.joined).length > 0 ? (
-                    <div className="event-list">
-                      {events
-                        .filter((event) => event.joined)
-                        .map((event) => (
-                          <EventRow
-                            key={event.id}
-                            event={event}
-                            onOpen={openEvent}
-                          />
-                        ))}
-                    </div>
-                  ) : (
-                    <div className="ig-empty">
-                      <div className="ig-empty-icon">
-                        <CalendarDays size={26} />
-                      </div>
-
-                      <b>Пока нет событий</b>
-
-                      <span>События, в которых ты участвуешь, появятся здесь</span>
-                    </div>
-                  )
-                ) : (
-                  <>
                 {photoPosts.length > 0 ? (
                   <div className="ig-grid">
                     {photoPosts.map((post) => (
@@ -3554,8 +3509,6 @@ export default function App() {
                       Опубликовать фото
                     </button>
                   </div>
-                )}
-                  </>
                 )}
               </>
             ) : (
