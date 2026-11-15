@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState, type PointerEvent } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState, type PointerEvent } from 'react';
 import {
   ArrowRight, ArrowUpRight, Bell, CalendarDays, Check,
   ChevronRight, Compass, MapPin, Plus, Search,
   Settings, Sparkles, Users, UsersRound, UserRound, Send, Music2, Dumbbell,
-  X, Clock3, SlidersHorizontal, LayoutGrid, Trash2, Camera, Star, Gamepad2, Palette, Cpu, ChevronLeft, MessageCircle
+  X, Clock3, SlidersHorizontal, LayoutGrid, Trash2, Camera, Gamepad2, Palette, Cpu, ChevronLeft,
+  MessageCircle, LogOut, Ellipsis, Share2
 } from 'lucide-react';
 import { firebaseConfigured, storage } from './firebase';
 import { deleteObject, getDownloadURL, ref as storageRef, uploadBytes } from 'firebase/storage';
@@ -15,10 +16,11 @@ import {
   goDeletePhotoPost,
   goGetData,
   goGetLiveUpdates,
+  goGetPulse,
+  goLeaveEvent,
+  goDeleteEvent,
   goCreateClub,
   goGetPosts,
-  goGetEventChat,
-  goSendEventMessage,
   goJoinEvent,
   goMarkNotificationsRead,
   goSaveProfile,
@@ -28,10 +30,11 @@ import {
   type ApiMatch,
   type ApiNotification,
   type ApiPhotoPost,
-  type ApiEventMessage,
   type ApiProfile,
   type GoData,
 } from './goApi';
+
+const GroupScreen = lazy(() => import('./GroupScreen'));
 
 type TelegramWebApp = {
   initData: string;
@@ -94,6 +97,7 @@ type EventItem = {
   forYou?: boolean;
   city?: string;
   nearby?: boolean;
+  createdBy?: string;
 };
 
 type Club = {
@@ -438,6 +442,7 @@ function toEvent(event: GoData['events'][number]): EventItem {
     participantCount: count,
     capacity,
     joined: event.joined,
+    createdBy: event.createdBy || '',
     color: eventColor(event.category || ''),
     description: event.description,
   };
@@ -492,114 +497,373 @@ async function prepareImage(file: File, max = 1280): Promise<Blob> {
   );
 }
 
-function eventIcon(category: string) {
+// У событий нет загруженных фото, поэтому обложка рисуется по категории.
+type ArtKind = 'crowd' | 'city' | 'field' | 'grid';
+
+function artFor(category: string): {
+  a: string;
+  b: string;
+  glow: string;
+  kind: ArtKind;
+} {
   const value = norm(category);
 
-  if (value.includes('спорт')) return Dumbbell;
-  if (value.includes('музык')) return Music2;
-  if (value.includes('игр')) return Gamepad2;
-  if (
-    value.includes('твор') ||
-    value.includes('фото') ||
-    value.includes('арт')
-  ) {
-    return Palette;
+  if (value.includes('муз')) return { a: '#1a0b4d', b: '#8a3df0', glow: '#e0b3ff', kind: 'crowd' };
+  if (value.includes('спорт')) return { a: '#101a55', b: '#4a6cf0', glow: '#b6c8ff', kind: 'field' };
+  if (value.includes('игр')) return { a: '#1d0a52', b: '#9a3df0', glow: '#7df0ff', kind: 'grid' };
+  if (value.includes('тех')) return { a: '#0c1a52', b: '#5b4df0', glow: '#8fe6ff', kind: 'city' };
+  if (value.includes('твор') || value.includes('фото') || value.includes('арт')) {
+    return { a: '#340b52', b: '#c03dd0', glow: '#ffb3f0', kind: 'city' };
   }
-  if (value.includes('тех')) return Cpu;
-  if (value.includes('встреч')) return Users;
 
-  return Sparkles;
+  return { a: '#1f0b57', b: '#7c3df0', glow: '#d2b8ff', kind: 'crowd' };
 }
 
-// У событий нет загруженных фото, поэтому обложка рисуется по категории.
-function EventCover({ category, size }: { category: string; size: number }) {
-  const Icon = eventIcon(category);
+function EventArt({ category }: { category: string }) {
+  const art = artFor(category);
+  const key = norm(category).replace(/[^a-zа-я0-9]/g, '') || 'x';
+  const heads = Array.from({ length: 14 }, (_, i) => ({
+    x: 14 + i * 28 + (i % 3) * 4,
+    y: 236 + ((i * 7) % 5) * 6,
+    r: 13 + (i % 4) * 2,
+  }));
 
   return (
-    <div className="cover" aria-hidden="true">
-      <span className="cover-ring r1" />
-      <span className="cover-ring r2" />
-      <span className="cover-icon">
-        <Icon size={size} />
-      </span>
+    <svg
+      className="art"
+      viewBox="0 0 400 300"
+      preserveAspectRatio="xMidYMid slice"
+      aria-hidden="true"
+    >
+      <defs>
+        <linearGradient id={`art-bg-${key}`} x1="0" y1="0" x2="0.4" y2="1">
+          <stop offset="0" stopColor={art.b} />
+          <stop offset="1" stopColor={art.a} />
+        </linearGradient>
+        <radialGradient id={`art-glow-${key}`} cx="50%" cy="30%" r="60%">
+          <stop offset="0" stopColor={art.glow} stopOpacity=".75" />
+          <stop offset="1" stopColor={art.glow} stopOpacity="0" />
+        </radialGradient>
+      </defs>
+
+      <rect width="400" height="300" fill={`url(#art-bg-${key})`} />
+      <rect width="400" height="300" fill={`url(#art-glow-${key})`} />
+
+      {art.kind === 'crowd' && (
+        <>
+          <g fill={art.glow} opacity=".2">
+            <path d="M70 0l40 0 -70 240z" />
+            <path d="M170 0l36 0 -20 240z" />
+            <path d="M250 0l36 0 56 240z" />
+            <path d="M330 0l30 0 60 200z" />
+          </g>
+          <g fill="#0a0518">
+            {heads.map((h, i) => (
+              <g key={i}>
+                <circle cx={h.x} cy={h.y} r={h.r} />
+                <path
+                  d={`M${h.x - h.r - 8} 310c0-40 ${h.r}-52 ${h.r + 8}-52s${h.r + 8} 12 ${h.r + 8} 52z`}
+                />
+              </g>
+            ))}
+          </g>
+        </>
+      )}
+
+      {art.kind === 'city' && (
+        <g fill="#0a0518" opacity=".92">
+          <path d="M0 300V190h30v-40h26v40h20v-70h30v70h22v-30h24v30h18v-100h34v100h22v-60h26v60h20v-84h30v84h24v-40h28v40h16v-20h30v20h20v110z" />
+          <g fill={art.glow} opacity=".55">
+            {Array.from({ length: 26 }, (_, i) => (
+              <rect key={i} x={20 + (i * 47) % 360} y={170 + ((i * 29) % 100)} width="5" height="7" rx="1" />
+            ))}
+          </g>
+        </g>
+      )}
+
+      {art.kind === 'field' && (
+        <g fill="none" stroke={art.glow} strokeWidth="3" opacity=".5">
+          <ellipse cx="200" cy="280" rx="260" ry="90" />
+          <ellipse cx="200" cy="280" rx="170" ry="56" />
+          <path d="M200 190v180" />
+          <circle cx="200" cy="140" r="28" fill={art.glow} fillOpacity=".25" stroke="none" />
+        </g>
+      )}
+
+      {art.kind === 'grid' && (
+        <g stroke={art.glow} strokeWidth="1.5" opacity=".4" fill="none">
+          {Array.from({ length: 9 }, (_, i) => (
+            <path key={i} d={`M${200 + (i - 4) * 12} 150L${200 + (i - 4) * 70} 300`} />
+          ))}
+          {Array.from({ length: 6 }, (_, i) => (
+            <path key={i} d={`M0 ${160 + i * i * 6}h400`} />
+          ))}
+          <rect x="150" y="70" width="100" height="56" rx="14" fill={art.glow} fillOpacity=".18" />
+        </g>
+      )}
+    </svg>
+  );
+}
+
+function AvatarStack({ count }: { count: number }) {
+  const shown = Math.min(3, count);
+
+  return (
+    <span className="avatar-stack" aria-hidden="true">
+      {Array.from({ length: shown }, (_, i) => (
+        <i key={i} className={`as as-${i}`}>
+          <UserRound size={13} />
+        </i>
+      ))}
+
+      {count > 3 && <b>+{count - 3}</b>}
+    </span>
+  );
+}
+
+function shortMonth(date: string) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(date)
+    ? new Date(`${date}T12:00:00`)
+        .toLocaleDateString('ru-RU', { month: 'short' })
+        .replace('.', '')
+    : '';
+}
+
+function DateBadge({ date }: { date: string }) {
+  return (
+    <div className="date-badge" aria-hidden="true">
+      <b>{Number(date.slice(8, 10)) || ''}</b>
+      <span>{shortMonth(date)}</span>
+    </div>
+  );
+}
+
+function withJoin(event: EventItem, joined: boolean, count: number): EventItem {
+  const safe = Math.max(0, count);
+
+  return {
+    ...event,
+    joined,
+    participantCount: safe,
+    people: `${safe} из ${event.capacity} участников`,
+  };
+}
+
+function Splash({
+  error,
+  onRetry,
+}: {
+  error: string;
+  onRetry: () => void;
+}) {
+  return (
+    <div className="splash" role="status" aria-live="polite">
+      <div className="splash-orb" />
+
+      <svg
+        className="splash-city"
+        viewBox="0 0 390 120"
+        preserveAspectRatio="xMidYMax slice"
+        aria-hidden="true"
+      >
+        <path d="M0 120V84h18V62h14v22h12V48h16v36h10V70h18v14h14V36h12v48h16V58h20v26h12V74h16V52h14v32h12V66h18v18h14V40h14v44h16V60h18v24h12V72h20v48z" />
+      </svg>
+
+      <div className="splash-logo">
+        <span className="splash-mark">
+          G<i />
+        </span>
+        <span className="splash-name">GO</span>
+        <span className="splash-tag">Город. Люди. События.</span>
+      </div>
+
+      {error ? (
+        <div className="splash-error">
+          <p>{error}</p>
+
+          <button className="primary" onClick={onRetry}>
+            Повторить
+          </button>
+        </div>
+      ) : (
+        <div className="splash-dots" aria-label="Загрузка">
+          <i />
+          <i />
+          <i />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ConfirmDialog({
+  title,
+  text,
+  confirmLabel,
+  busy,
+  onConfirm,
+  onCancel,
+}: {
+  title: string;
+  text: string;
+  confirmLabel: string;
+  busy: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div
+      className="confirm-backdrop"
+      onClick={() => {
+        if (!busy) onCancel();
+      }}
+    >
+      <div
+        className="confirm-dialog"
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="confirm-title"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <h3 id="confirm-title">{title}</h3>
+        <p>{text}</p>
+
+        <div className="confirm-actions">
+          <button className="ghost" onClick={onCancel} disabled={busy}>
+            Отмена
+          </button>
+
+          <button className="primary danger" onClick={onConfirm} disabled={busy}>
+            {busy ? 'Подожди…' : confirmLabel}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
 
 function EventTile({
   event,
-  variant,
   onOpen,
 }: {
   event: EventItem;
-  variant: 'hero' | 'rail';
   onOpen: (id: string) => void;
 }) {
-  const fill = Math.min(
-    100,
-    Math.round((event.participantCount / Math.max(1, event.capacity)) * 100)
-  );
-
-  const Title = variant === 'hero' ? 'h2' : 'h3';
-
   return (
     <button
-      className={`event-tile ${variant} event-${event.color}`}
+      className={`event-tile hero event-${event.color}`}
       onClick={() => onOpen(event.id)}
     >
-      <EventCover category={event.category} size={variant === 'hero' ? 26 : 22} />
+      <EventArt category={event.category} />
       <div className="cover-shade" />
 
-      <div className="event-topline">
-        <span className="event-tags">
-          <span className="event-category">{event.category}</span>
-
-          {event.nearby && (
-            <span className="badge-near">
-              <MapPin size={10} />
-              Рядом
-            </span>
-          )}
-        </span>
-
-        {event.forYou && (
-          <span className="badge-you">
-            <Star size={11} />
-            Для тебя
-          </span>
-        )}
-      </div>
+      <DateBadge date={event.date} />
 
       <div className="event-body">
-        <div className="event-meta">
-          <CalendarDays size={13} />
-          {displayDate(event.date)} · {event.time}
+        <h2>{event.title}</h2>
+
+        <div className="hero-line">
+          <MapPin size={14} />
+          {event.place}
         </div>
 
-        <Title>{event.title}</Title>
-
-        <div className="event-bottom">
-          <span>
-            <MapPin size={13} />
-            {event.place}
-          </span>
-
-          <b>
-            {event.participantCount}/{event.capacity}
-          </b>
+        <div className="hero-line">
+          <Clock3 size={14} />
+          {event.time} · {event.participantCount}/{event.capacity}
         </div>
 
-        <div className="fill-bar">
-          <i style={{ width: `${fill}%` }} />
-        </div>
+        <span className="hero-cta">
+          Участвовать
+          <ArrowRight size={15} />
+        </span>
       </div>
     </button>
   );
 }
 
+function EventRow({
+  event,
+  onOpen,
+}: {
+  event: EventItem;
+  onOpen: (id: string) => void;
+}) {
+  return (
+    <button className="event-row" onClick={() => onOpen(event.id)}>
+      <span className="event-row-art">
+        <EventArt category={event.category} />
+      </span>
+
+      <span className="event-row-body">
+        <b>{event.title}</b>
+
+        <small>
+          <CalendarDays size={12} />
+          {displayDate(event.date)} · {event.time}
+        </small>
+
+        <span className="event-row-people">
+          <AvatarStack count={event.participantCount} />
+          <em>
+            {event.participantCount}/{event.capacity}
+          </em>
+        </span>
+      </span>
+
+      <ChevronRight size={17} />
+    </button>
+  );
+}
+
+function Intro({ onDone }: { onDone: () => void }) {
+  return (
+    <div className="intro">
+      <div className="intro-bg" />
+
+      <svg className="intro-star" viewBox="0 0 120 120" aria-hidden="true">
+        <defs>
+          <linearGradient id="star-g" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stopColor="#fff" stopOpacity=".55" />
+            <stop offset="1" stopColor="#8b5cf6" stopOpacity=".15" />
+          </linearGradient>
+        </defs>
+        <path
+          d="M60 8l14 32 35 4-26 24 7 34-30-17-30 17 7-34L11 44l35-4z"
+          fill="url(#star-g)"
+          stroke="rgba(255,255,255,.5)"
+          strokeWidth="2"
+          strokeLinejoin="round"
+        />
+      </svg>
+
+      <div className="intro-content">
+        <span className="brand-g">
+          G<i />
+        </span>
+
+        <h1>
+          Больше,
+          <br />
+          чем просто
+          <br />
+          события
+        </h1>
+
+        <p>Сообщество. Возможности. Новые знакомства.</p>
+
+        <AvatarStack count={3} />
+      </div>
+
+      <button className="intro-cta" onClick={onDone}>
+        Присоединиться к GO
+        <ArrowRight size={18} />
+      </button>
+    </div>
+  );
+}
+
 export default function App() {
   const [tab, setTab] = useState<Tab>('home');
-  const [dragX, setDragX] = useState(0);
   const [swipeDirection, setSwipeDirection] = useState<'left' | 'right' | ''>('');
   const [swipeLock, setSwipeLock] = useState(false);
   const [detail, setDetail] = useState<Detail | null>(null);
@@ -620,13 +884,26 @@ export default function App() {
   const [communityClubs, setCommunityClubs] = useState<Club[]>(clubs);
   const [registeredUserCount, setRegisteredUserCount] = useState(0);
   const [initialLoaded, setInitialLoaded] = useState(false);
-  const [initialLoadError, setInitialLoadError] = useState('');
-  const [eventMessages, setEventMessages] = useState<ApiEventMessage[]>([]);
-  const [eventChatDraft, setEventChatDraft] = useState('');
-  const [eventChatLoading, setEventChatLoading] = useState(false);
-  const [eventChatSending, setEventChatSending] = useState(false);
-  const [eventChatError, setEventChatError] = useState('');
-
+  const [bootError, setBootError] = useState('');
+  const [bootNonce, setBootNonce] = useState(0);
+  const [groupId, setGroupId] = useState<string | null>(null);
+  const [heroIdx, setHeroIdx] = useState(0);
+  const [eventTab, setEventTab] = useState<'about' | 'members'>('about');
+  const [eventMenu, setEventMenu] = useState(false);
+  const [profileTab, setProfileTab] = useState<'posts' | 'events'>('posts');
+  const [clubCat, setClubCat] = useState('Все');
+  const [introSeen, setIntroSeen] = useState(() => {
+    try {
+      return localStorage.getItem('go_intro_seen') === '1';
+    } catch {
+      return false;
+    }
+  });
+  const [confirm, setConfirm] = useState<{
+    kind: 'leave' | 'delete';
+    id: string;
+  } | null>(null);
+  const [confirmBusy, setConfirmBusy] = useState(false);
   const [clubCreateOpen, setClubCreateOpen] = useState(false);
   const [clubCreating, setClubCreating] = useState(false);
   const [clubForm, setClubForm] = useState({
@@ -667,6 +944,12 @@ export default function App() {
   });
 
   const startX = useRef(0);
+  const loadedRef = useRef(false);
+  const joinBusy = useRef(new Set<string>());
+  const cardRef = useRef<HTMLDivElement>(null);
+  const hintNoRef = useRef<HTMLDivElement>(null);
+  const hintYesRef = useRef<HTMLDivElement>(null);
+  const dragRef = useRef(0);
   const moved = useRef(false);
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const postInputRef = useRef<HTMLInputElement>(null);
@@ -877,6 +1160,7 @@ export default function App() {
 
         if (!cancelled) {
           setAuthStatus('error');
+          setBootError(`Не удалось войти: ${errorMessage(error)}`);
           setNotice(`Ошибка входа: ${errorMessage(error)}`);
         }
       });
@@ -884,7 +1168,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [bootNonce]);
 
   const refreshData = async () => {
     if (!firebaseConfigured || authStatus !== 'signed-in') return;
@@ -919,7 +1203,8 @@ export default function App() {
       setPhotoPosts(data.photoPosts || []);
       setCommunityClubs((data.clubs || []).map(toClub));
       setRegisteredUserCount(Number(data.totalUsers || 0));
-      setInitialLoadError('');
+      loadedRef.current = true;
+      setBootError('');
       setInitialLoaded(true);
 
       if (data.profile) {
@@ -944,10 +1229,12 @@ export default function App() {
       }
     } catch (error) {
       console.error('GO data loading error:', error);
-      const message = `Не удалось загрузить данные: ${errorMessage(error)}`;
-      setInitialLoadError(message);
-      setInitialLoaded(true);
-      setNotice(message);
+
+      if (!loadedRef.current) {
+        setBootError(`Не удалось загрузить данные: ${errorMessage(error)}`);
+      } else {
+        setNotice(`Не удалось загрузить данные: ${errorMessage(error)}`);
+      }
     } finally {
       setDataLoading(false);
     }
@@ -962,14 +1249,67 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authStatus]);
 
-  // Актуализируем данные в фоне раз в 30 секунд.
+  const syncEvents = async () => {
+    try {
+      const pulse = await goGetPulse();
+
+      setEvents(
+        (pulse.events || [])
+          .map(toEvent)
+          .sort((a, b) =>
+            `${a.date}${a.time}`.localeCompare(`${b.date}${b.time}`)
+          )
+      );
+
+      setNotifications(pulse.notifications || []);
+    } catch (error) {
+      console.warn('GO events sync failed:', error);
+    }
+  };
+
+  // Лёгкий опрос: события и уведомления раз в 30 секунд, только пока
+  // приложение открыто. Анкеты и мэтчи — когда изменился счётчик мэтчей,
+  // при возврате в приложение и изредка по таймеру.
   useEffect(() => {
     if (authStatus !== 'signed-in' || !initialLoaded) return;
 
     let stopped = false;
     let inFlight = false;
+    let ticks = 0;
+    let lastMatchCount: number | null = null;
+    let hiddenAt = 0;
 
-    const pullLiveData = async () => {
+    const pullFull = async () => {
+      const data = await goGetLiveUpdates();
+
+      if (stopped) return;
+
+      const publicPeople = (data.people || []).map(toPerson);
+      const swiped = data.swipedUids || [];
+
+      setAllPeople(publicPeople);
+
+      setPeople(
+        publicPeople.filter((person) => !swiped.includes(person.uid))
+      );
+
+      setEvents(
+        (data.events || [])
+          .map(toEvent)
+          .sort((a, b) =>
+            `${a.date}${a.time}`.localeCompare(`${b.date}${b.time}`)
+          )
+      );
+
+      setMatches(data.matches || []);
+      setNotifications(data.notifications || []);
+      setClubJoined(data.clubMemberships || []);
+      setClubCounts(data.clubCounts || {});
+      setCommunityClubs((data.clubs || []).map(toClub));
+      setRegisteredUserCount(Number(data.totalUsers || 0));
+    };
+
+    const pull = async (full: boolean) => {
       if (
         stopped ||
         inFlight ||
@@ -981,35 +1321,37 @@ export default function App() {
       inFlight = true;
 
       try {
-        const data = await goGetLiveUpdates();
+        if (full) {
+          await pullFull();
+          return;
+        }
+
+        const pulse = await goGetPulse();
 
         if (stopped) return;
 
-        const publicPeople = (data.people || []).map(toPerson);
-        const swiped = data.swipedUids || [];
+        ticks += 1;
 
-        setAllPeople(publicPeople);
+        if (joinBusy.current.size === 0) {
+          setEvents(
+            (pulse.events || [])
+              .map(toEvent)
+              .sort((a, b) =>
+                `${a.date}${a.time}`.localeCompare(`${b.date}${b.time}`)
+              )
+          );
+        }
 
-        setPeople(
-          publicPeople.filter(
-            (person) => !swiped.includes(person.uid)
-          )
-        );
+        setNotifications(pulse.notifications || []);
 
-        setEvents(
-          (data.events || [])
-            .map(toEvent)
-            .sort((a, b) =>
-              `${a.date}${a.time}`.localeCompare(`${b.date}${b.time}`)
-            )
-        );
+        const matchesChanged =
+          lastMatchCount !== null && pulse.matchCount !== lastMatchCount;
 
-        setMatches(data.matches || []);
-        setNotifications(data.notifications || []);
-        setClubJoined(data.clubMemberships || []);
-        setClubCounts(data.clubCounts || {});
-        setCommunityClubs((data.clubs || []).map(toClub));
-        setRegisteredUserCount(Number(data.totalUsers || 0));
+        lastMatchCount = pulse.matchCount;
+
+        if (matchesChanged || ticks % 6 === 0) {
+          await pullFull();
+        }
       } catch (error) {
         console.warn('GO live refresh failed:', error);
       } finally {
@@ -1018,22 +1360,19 @@ export default function App() {
     };
 
     const onVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        void pullLiveData();
+      if (document.visibilityState === 'hidden') {
+        hiddenAt = Date.now();
+        return;
       }
+
+      void pull(hiddenAt > 0 && Date.now() - hiddenAt > 60000);
     };
 
-    void pullLiveData();
+    void pull(false);
 
-    const timer = window.setInterval(
-      () => void pullLiveData(),
-      30000
-    );
+    const timer = window.setInterval(() => void pull(false), 30000);
 
-    document.addEventListener(
-      'visibilitychange',
-      onVisibilityChange
-    );
+    document.addEventListener('visibilitychange', onVisibilityChange);
 
     return () => {
       stopped = true;
@@ -1054,7 +1393,11 @@ export default function App() {
     if (!tg) return;
 
     const handleBack = () => {
-      if (notificationsOpen) {
+      if (confirm) {
+        if (!confirmBusy) setConfirm(null);
+      } else if (groupId) {
+        setGroupId(null);
+      } else if (notificationsOpen) {
         setNotificationsOpen(false);
       } else if (viewPost) {
         setViewPost(null);
@@ -1071,6 +1414,8 @@ export default function App() {
     };
 
     if (
+      confirm ||
+      groupId ||
       detail ||
       notificationsOpen ||
       viewPost ||
@@ -1085,7 +1430,7 @@ export default function App() {
     tg.BackButton.onClick(handleBack);
 
     return () => tg.BackButton.offClick(handleBack);
-  }, [detail, notificationsOpen, viewPost, eventsOpen, createStarted, tab]);
+  }, [detail, notificationsOpen, viewPost, eventsOpen, createStarted, tab, groupId, confirm, confirmBusy]);
 
   const changeTab = (next: Tab) => {
     setTab(next);
@@ -1181,7 +1526,7 @@ export default function App() {
     } finally {
       setSwipeLock(false);
       setSwipeDirection('');
-      setDragX(0);
+      applyDrag(0, false);
     }
   };
 
@@ -1194,7 +1539,33 @@ export default function App() {
       await submitSwipe(currentPerson, direction);
     } finally {
       setSwipeDirection('');
-      setDragX(0);
+      applyDrag(0, false);
+    }
+  };
+
+  // Перетаскивание карточки меняет DOM напрямую, без перерисовки всего App.
+  const applyDrag = (value: number, animate: boolean) => {
+    dragRef.current = value;
+
+    const card = cardRef.current;
+
+    if (card) {
+      card.style.transition = animate
+        ? 'transform .28s cubic-bezier(.2,.8,.2,1)'
+        : 'none';
+      card.style.transform = `translateX(${value}px) rotate(${value / 18}deg)`;
+    }
+
+    if (hintNoRef.current) {
+      hintNoRef.current.style.opacity = String(
+        Math.min(1, Math.max(0, -value / 90))
+      );
+    }
+
+    if (hintYesRef.current) {
+      hintYesRef.current.style.opacity = String(
+        Math.min(1, Math.max(0, value / 90))
+      );
     }
   };
 
@@ -1211,27 +1582,30 @@ export default function App() {
         moved.current = true;
       }
 
-      setDragX(
+      applyDrag(
         Math.max(
           -150,
           Math.min(150, event.clientX - startX.current)
-        )
+        ),
+        false
       );
     }
-  };  const onPointerUp = () => {
+  };
+
+  const onPointerUp = () => {
     if (!moved.current && currentPerson && !swipeLock) {
       startX.current = 0;
-      setDragX(0);
+      applyDrag(0, true);
       openPerson(currentPerson.uid);
       return;
     }
 
-    if (dragX > 90) {
+    if (dragRef.current > 90) {
       void finishSwipe('right');
-    } else if (dragX < -90) {
+    } else if (dragRef.current < -90) {
       void finishSwipe('left');
     } else {
-      setDragX(0);
+      applyDrag(0, true);
     }
 
     startX.current = 0;
@@ -1270,15 +1644,138 @@ export default function App() {
       return;
     }
 
+    if (
+      item.joined ||
+      joinBusy.current.has(eventId) ||
+      item.participantCount >= item.capacity
+    ) {
+      return;
+    }
+
+    // Оптимистичное обновление: интерфейс отвечает сразу, при ошибке откатываем.
+    joinBusy.current.add(eventId);
+
+    setEvents((old) =>
+      old.map((event) =>
+        event.id === eventId
+          ? withJoin(event, true, event.participantCount + 1)
+          : event
+      )
+    );
+
     try {
-      await goJoinEvent({ eventId });
-      await refreshData();
-      setNotice('Ты добавлен в список участников.');
+      const result = await goJoinEvent({ eventId });
+
+      setEvents((old) =>
+        old.map((event) =>
+          event.id === eventId
+            ? withJoin(event, true, result.participantCount)
+            : event
+        )
+      );
+
+      setNotice(
+        result.joined
+          ? 'Ты добавлен в список участников.'
+          : 'Ты уже участвуешь в этом событии.'
+      );
     } catch (error) {
+      setEvents((old) =>
+        old.map((event) => (event.id === eventId ? item : event))
+      );
+
       setNotice(
         `Не удалось присоединиться: ${errorMessage(error)}`
       );
+    } finally {
+      joinBusy.current.delete(eventId);
     }
+  };
+
+  const leaveEvent = async (eventId: string): Promise<boolean> => {
+    const item = events.find((event) => event.id === eventId);
+    if (!item) return false;
+
+    if (!firebaseConfigured || eventId.startsWith('demo-')) {
+      setEvents((old) =>
+        old.map((event) =>
+          event.id === eventId
+            ? withJoin(event, false, event.participantCount - 1)
+            : event
+        )
+      );
+
+      setNotice('Ты вышел из события (демо-режим).');
+      return true;
+    }
+
+    try {
+      const result = await goLeaveEvent({ eventId });
+
+      setEvents((old) =>
+        old.map((event) =>
+          event.id === eventId
+            ? withJoin(event, false, result.participantCount)
+            : event
+        )
+      );
+
+      setNotice('Ты вышел из события.');
+      return true;
+    } catch (error) {
+      setNotice(`Не удалось выйти: ${errorMessage(error)}`);
+      return false;
+    }
+  };
+
+  const deleteEvent = async (eventId: string): Promise<boolean> => {
+    if (!firebaseConfigured || eventId.startsWith('demo-')) {
+      setEvents((old) => old.filter((event) => event.id !== eventId));
+      setNotice('Событие удалено (демо-режим).');
+      return true;
+    }
+
+    try {
+      await goDeleteEvent({ eventId });
+
+      setEvents((old) => old.filter((event) => event.id !== eventId));
+      setNotice('Событие удалено.');
+      return true;
+    } catch (error) {
+      setNotice(`Не удалось удалить событие: ${errorMessage(error)}`);
+      return false;
+    }
+  };
+
+  const runConfirm = async () => {
+    if (!confirm || confirmBusy) return;
+
+    setConfirmBusy(true);
+
+    const ok =
+      confirm.kind === 'leave'
+        ? await leaveEvent(confirm.id)
+        : await deleteEvent(confirm.id);
+
+    setConfirmBusy(false);
+    setConfirm(null);
+
+    if (ok) {
+      setGroupId(null);
+      setDetail(null);
+    }
+  };
+
+  const retryBoot = () => {
+    setBootError('');
+
+    if (authStatus === 'signed-in') {
+      void refreshData();
+      return;
+    }
+
+    setAuthStatus('checking');
+    setBootNonce((value) => value + 1);
   };
 
   const createEvent = async () => {
@@ -1758,67 +2255,6 @@ export default function App() {
   const detailEvent = detail?.type === 'event'
     ? events.find((event) => event.id === detail.id)
     : undefined;
-  const detailEventId = detail?.type === 'event' ? detail.id : undefined;
-
-  useEffect(() => {
-    if (
-      detail?.type !== 'event' ||
-      !detailEvent?.joined ||
-      !firebaseConfigured ||
-      authStatus !== 'signed-in' ||
-      detail.id.startsWith('demo-')
-    ) {
-      setEventMessages([]);
-      setEventChatError('');
-      return;
-    }
-
-    let stopped = false;
-    let inFlight = false;
-    const loadMessages = async () => {
-      if (inFlight || stopped) return;
-      inFlight = true;
-      setEventChatLoading(true);
-      try {
-        const result = await goGetEventChat({ eventId: detail.id });
-        if (!stopped) {
-          setEventMessages(result.messages || []);
-          setEventChatError('');
-        }
-      } catch (error) {
-        if (!stopped) setEventChatError(errorMessage(error));
-      } finally {
-        inFlight = false;
-        if (!stopped) setEventChatLoading(false);
-      }
-    };
-
-    void loadMessages();
-    const timer = window.setInterval(() => void loadMessages(), 10000);
-    return () => {
-      stopped = true;
-      window.clearInterval(timer);
-    };
-  }, [detail?.type, detailEventId, detailEvent?.joined, authStatus]);
-
-  const sendEventChatMessage = async () => {
-    if (detail?.type !== 'event') return;
-    const text = eventChatDraft.trim();
-    if (!text || eventChatSending) return;
-    setEventChatSending(true);
-    setEventChatError('');
-    try {
-      await goSendEventMessage({ eventId: detail.id, text });
-      setEventChatDraft('');
-      const result = await goGetEventChat({ eventId: detail.id });
-      setEventMessages(result.messages || []);
-    } catch (error) {
-      setEventChatError(errorMessage(error));
-    } finally {
-      setEventChatSending(false);
-    }
-  };
-
 
   const detailClub = detail?.type === 'club'
     ? communityClubs.find((club) => club.id === detail.id)
@@ -1830,9 +2266,8 @@ export default function App() {
       )
     : [];
 
-  const greetName = profile ? profile.name.split(' ')[0] : '';
-  const featuredEvent = filteredEvents[0];
-  const railEvents = filteredEvents.slice(1, 9);
+  const heroEvents = filteredEvents.slice(0, 3);
+  const listEvents = filteredEvents.slice(3, 11);
 
   const eventFilters = [
     ['all', 'Все'],
@@ -1850,90 +2285,68 @@ export default function App() {
     ? matchedPeople.some((person) => person.uid === detailPerson.uid)
     : false;
 
-  if (
-    authStatus === 'checking' ||
-    (authStatus === 'signed-in' && !initialLoaded)
-  ) {
+  const showSplash =
+    !initialLoaded &&
+    (authStatus === 'checking' ||
+      authStatus === 'signed-in' ||
+      (authStatus === 'error' && Boolean(bootError)));
+
+  if (showSplash) {
+    return <Splash error={bootError} onRetry={retryBoot} />;
+  }
+
+  if (!introSeen && authStatus === 'signed-in') {
     return (
-      <div className="auth-screen auth-screen-loading">
-        <div className="auth-orbit auth-orbit-a" />
-        <div className="auth-orbit auth-orbit-b" />
-        <div className="auth-cityline" aria-hidden="true"><i /><i /><i /><i /><i /><i /></div>
-        <div className="auth-grain" aria-hidden="true" />
-        <div className="auth-content auth-content-loading">
-          <div className="auth-brand-lockup">
-            <div className="auth-logo">G<span>.</span></div>
-            <span className="auth-brand-name">GO</span>
-          </div>
-          <div className="auth-loader"><i /><i /><i /></div>
-          <h1>{authStatus === 'checking' ? <>Твой город.<br />Твои люди.</> : <>Собираем<br />твоё пространство.</>}</h1>
-          <p>{authStatus === 'checking' ? 'Подключаемся к Telegram и проверяем защищённую сессию' : 'Загружаем события, сообщества и знакомства'}</p>
-          <div className="auth-progress"><span /></div>
-          <span className="auth-caption">CITY · PEOPLE · EVENTS</span>
-        </div>
-        <div className="auth-bottom-note">Место, где планы становятся встречами</div>
-      </div>
+      <Intro
+        onDone={() => {
+          try {
+            localStorage.setItem('go_intro_seen', '1');
+          } catch {
+            // хранилище недоступно — покажем заставку снова в следующий раз
+          }
+
+          setIntroSeen(true);
+        }}
+      />
     );
   }
 
-  if (authStatus === 'not-in-telegram' || authStatus === 'error') {
-    return (
-      <div className="auth-screen auth-screen-entry">
-        <div className="auth-orbit auth-orbit-a" />
-        <div className="auth-orbit auth-orbit-b" />
-        <div className="auth-cityline" aria-hidden="true"><i /><i /><i /><i /><i /><i /></div>
-        <div className="auth-grain" aria-hidden="true" />
-        <div className="auth-entry-top">
-          <div className="auth-mini-brand"><span>G</span><i>.</i> GO</div>
-          <span className="auth-version">ГОРОД В ДВИЖЕНИИ</span>
-        </div>
-        <div className="auth-entry-content">
-          <div className="auth-emblem-wrap">
-            <div className="auth-emblem-halo" />
-            <div className="auth-emblem">G<span>.</span></div>
-            <span className="auth-emblem-star">✦</span>
-          </div>
-          <div className="auth-kicker"><span /> ТВОЯ СРЕДА УЖЕ ЗДЕСЬ</div>
-          <h1>{authStatus === 'not-in-telegram' ? <>Город.<br />Люди.<br /><em>События.</em></> : <>Кажется, связь<br />немного <em>потерялась.</em></>}</h1>
-          <p className="auth-entry-description">{authStatus === 'not-in-telegram'
-            ? 'Находи своих, открывай новые места и создавай поводы встретиться.'
-            : notice || 'Не получилось подтвердить вход. Проверь соединение и повтори попытку.'}</p>
-          <div className="auth-feature-row">
-            <span><CalendarDays size={15} /> События</span>
-            <span><UsersRound size={15} /> Сообщества</span>
-            <span><MapPin size={15} /> Рядом</span>
-          </div>
-          <button className="primary auth-retry auth-entry-cta" onClick={() => window.location.reload()}>
-            {authStatus === 'not-in-telegram' ? 'Я открыл GO в Telegram' : 'Попробовать снова'}
-            <span className="auth-cta-arrow"><ArrowRight size={18} /></span>
-          </button>
-          <div className="auth-entry-footnote">{authStatus === 'not-in-telegram' ? 'Открой мини-приложение через Telegram, чтобы войти безопасно.' : 'Твои данные и профиль останутся без изменений.'}</div>
-        </div>
-        <div className="auth-entry-footer"><span>GO<span>.</span></span><i /> CITY · PEOPLE · EVENTS</div>
-      </div>
-    );
-  }
+  const confirmEvent = confirm
+    ? events.find((event) => event.id === confirm.id)
+    : undefined;
 
-  if (initialLoadError) {
-    return (
-      <div className="auth-screen auth-screen-entry">
-        <div className="auth-orbit auth-orbit-a" />
-        <div className="auth-orbit auth-orbit-b" />
-        <div className="auth-grain" aria-hidden="true" />
-        <div className="auth-entry-top"><div className="auth-mini-brand"><span>G</span><i>.</i> GO</div><span className="auth-version">СИНХРОНИЗАЦИЯ</span></div>
-        <div className="auth-entry-content auth-load-error">
-          <div className="auth-error-symbol">!</div>
-          <div className="auth-kicker"><span /> НЕ УДАЛОСЬ ЗАГРУЗИТЬ</div>
-          <h1>Почти<br /><em>на месте.</em></h1>
-          <p className="auth-entry-description">{initialLoadError}</p>
-          <button className="primary auth-retry auth-entry-cta" onClick={() => window.location.reload()}>
-            Повторить загрузку <span className="auth-cta-arrow"><ArrowRight size={18} /></span>
-          </button>
-        </div>
-        <div className="auth-entry-footer"><span>GO<span>.</span></span><i /> CITY · PEOPLE · EVENTS</div>
-      </div>
-    );
-  }
+  const shareEvent = async (event: EventItem) => {
+    const text = `${event.title} — ${displayDate(event.date)}, ${event.time}, ${event.place}`;
+
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: event.title, text });
+      } else {
+        await navigator.clipboard.writeText(text);
+        setNotice('Описание события скопировано.');
+      }
+    } catch {
+      // пользователь закрыл окно «Поделиться»
+    }
+  };
+
+  const visibleClubs = communityClubs.filter(
+    (club) =>
+      (clubCat === 'Все' || club.category === clubCat) &&
+      (club.title.toLowerCase().includes(query.toLowerCase()) ||
+        club.description.toLowerCase().includes(query.toLowerCase()))
+  );
+
+  const clubCategories = [
+    'Все',
+    ...Array.from(
+      new Set(
+        communityClubs
+          .map((club) => club.category || '')
+          .filter(Boolean)
+      )
+    ),
+  ];
 
   return (
     <div className={`app-shell${kbOpen ? ' kb-open' : ''}`}>
@@ -1943,12 +2356,10 @@ export default function App() {
           onClick={() => changeTab('home')}
           aria-label="На главную"
         >
-          <span className="brand-mark">G</span>
-          <span>
-            GO<span className="brand-dot">.</span>
+          <span className="brand-g">
+            G<i />
           </span>
         </button>
-
 
         <button
           className="icon-button top-action"
@@ -1976,24 +2387,6 @@ export default function App() {
       <main className="main-content">
         {tab === 'home' && (
           <section className="screen screen-home">
-            <div className="home-head">
-              <div>
-                <div className="eyebrow">
-                  <Sparkles size={13} />
-                  {profile ? `Привет, ${greetName}` : 'Добро пожаловать'}
-                </div>
-
-                <h1 className="home-title">
-                  События<span>.</span>
-                </h1>
-              </div>
-
-              <button className="glass-btn" onClick={startCreate}>
-                <Plus size={15} />
-                Создать
-              </button>
-            </div>
-
             {authStatus === 'signed-in' && !dataLoading && !profile && (
               <button
                 className="onboard-card"
@@ -2014,6 +2407,39 @@ export default function App() {
               </button>
             )}
 
+            {heroEvents.length > 0 && (
+              <div className="hero-wrap">
+                <div
+                  className="hero-track"
+                  onScroll={(event) => {
+                    const el = event.currentTarget;
+                    const index = Math.round(el.scrollLeft / el.clientWidth);
+
+                    if (index !== heroIdx) setHeroIdx(index);
+                  }}
+                >
+                  {heroEvents.map((event) => (
+                    <EventTile
+                      key={event.id}
+                      event={event}
+                      onOpen={openEvent}
+                    />
+                  ))}
+                </div>
+
+                {heroEvents.length > 1 && (
+                  <div className="hero-dots" aria-hidden="true">
+                    {heroEvents.map((event, index) => (
+                      <i
+                        key={event.id}
+                        className={index === heroIdx ? 'on' : ''}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
             <div className="chip-row chip-scroll">
               {eventFilters.map(([id, label]) => (
                 <button
@@ -2026,44 +2452,32 @@ export default function App() {
               ))}
             </div>
 
-            {featuredEvent ? (
-              <>
-                <EventTile
-                  event={featuredEvent}
-                  variant="hero"
-                  onOpen={openEvent}
-                />
+            {filteredEvents.length > 0 ? (
+              listEvents.length > 0 && (
+                <section className="section">
+                  <div className="section-heading">
+                    <h2>Ближайшие события</h2>
 
-                {railEvents.length > 0 && (
-                  <section className="section">
-                    <div className="section-heading">
-                      <div>
-                        <div className="eyebrow">БЛИЖАЙШИЕ</div>
-                        <h2>События рядом</h2>
-                      </div>
+                    <button
+                      className="text-button"
+                      onClick={() => setEventsOpen(true)}
+                    >
+                      Смотреть все
+                      <ArrowRight size={14} />
+                    </button>
+                  </div>
 
-                      <button
-                        className="text-button"
-                        onClick={() => setEventsOpen(true)}
-                      >
-                        Все ({upcomingEvents.length})
-                        <ArrowUpRight size={14} />
-                      </button>
-                    </div>
-
-                    <div className="event-rail">
-                      {railEvents.map((event) => (
-                        <EventTile
-                          key={event.id}
-                          event={event}
-                          variant="rail"
-                          onOpen={openEvent}
-                        />
-                      ))}
-                    </div>
-                  </section>
-                )}
-              </>
+                  <div className="event-list">
+                    {listEvents.map((event) => (
+                      <EventRow
+                        key={event.id}
+                        event={event}
+                        onOpen={openEvent}
+                      />
+                    ))}
+                  </div>
+                </section>
+              )
             ) : upcomingEvents.length > 0 ? (
               <div className="empty-card">
                 <CalendarDays size={26} />
@@ -2137,7 +2551,7 @@ export default function App() {
                     >
                       <span className={`mini-avatar ${person.color}`}>
                         {person.photoUrl ? (
-                          <img src={person.photoUrl} alt="" />
+                          <img src={person.photoUrl} alt="" loading="lazy" decoding="async" />
                         ) : (
                           person.initials
                         )}
@@ -2259,7 +2673,7 @@ export default function App() {
                         tabIndex={0}
                       >
                         {person.photoUrl ? (
-                          <img src={person.photoUrl} alt="" />
+                          <img src={person.photoUrl} alt="" loading="lazy" decoding="async" />
                         ) : (
                           person.initials
                         )}
@@ -2303,58 +2717,43 @@ export default function App() {
                 <div className="swipe-stage">
                   <div
                     className="swipe-hint hint-no"
-                    style={{
-                      opacity: Math.min(
-                        1,
-                        Math.max(0, -dragX / 90)
-                      ),
-                    }}
+                    ref={hintNoRef}
+                    style={{ opacity: 0 }}
                   >
                     ПРОПУСК
                   </div>
 
                   <div
                     className="swipe-hint hint-yes"
-                    style={{
-                      opacity: Math.min(
-                        1,
-                        Math.max(0, dragX / 90)
-                      ),
-                    }}
+                    ref={hintYesRef}
+                    style={{ opacity: 0 }}
                   >
                     ИНТЕРЕСНО
                   </div>
 
                   <div
                     className="person-card"
+                    key={currentPerson.uid}
+                    ref={cardRef}
                     onPointerDown={onPointerDown}
                     onPointerMove={onPointerMove}
                     onPointerUp={onPointerUp}
                     onPointerCancel={() => {
-                      setDragX(0);
+                      applyDrag(0, true);
                       startX.current = 0;
                     }}
-                    style={{
-                      transform: `translateX(${
-                        swipeDirection === 'right'
-                          ? 520
-                          : swipeDirection === 'left'
-                            ? -520
-                            : dragX
-                      }px) rotate(${
-                        swipeDirection === 'right'
-                          ? 18
-                          : swipeDirection === 'left'
-                            ? -18
-                            : dragX / 18
-                      }deg)`,
-
-                      transition: swipeDirection
-                        ? 'transform .23s ease-in'
-                        : dragX === 0
-                          ? 'transform .28s cubic-bezier(.2,.8,.2,1)'
-                          : 'none',
-                    }}
+                    style={
+                      swipeDirection
+                        ? {
+                            transform: `translateX(${
+                              swipeDirection === 'right' ? 520 : -520
+                            }px) rotate(${
+                              swipeDirection === 'right' ? 18 : -18
+                            }deg)`,
+                            transition: 'transform .23s ease-in',
+                          }
+                        : undefined
+                    }
                   >
                     <div className={`person-art ${currentPerson.color}`}>
                       <div className="person-art-orb" />
@@ -2796,20 +3195,10 @@ export default function App() {
 
         {tab === 'communities' && (
           <section className="screen communities-page">
-            <div className="eyebrow">СВОИ ЛЮДИ</div>
+            <h1 className="page-title">Клубы и сообщества</h1>
 
-            <h1 className="page-title">
-              Найди свой<br />
-              <span>клуб.</span>
-            </h1>
-
-            <p className="muted">
-              Клубы собирают людей по интересам.
-              Вступай в сообщества или создавай свои.
-            </p>
-
-            <p className="muted">
-              В GO уже {registeredUserCount} участников.
+            <p className="muted small">
+              В GO уже {registeredUserCount} участников
             </p>
 
             <div className="community-search">
@@ -2820,6 +3209,18 @@ export default function App() {
                 onChange={(event) => setQuery(event.target.value)}
                 placeholder="Поиск сообществ"
               />
+            </div>
+
+            <div className="chip-row chip-scroll">
+              {clubCategories.map((category) => (
+                <button
+                  key={category}
+                  className={`chip ${clubCat === category ? 'on' : ''}`}
+                  onClick={() => setClubCat(category)}
+                >
+                  {category}
+                </button>
+              ))}
             </div>
 
             <button
@@ -2898,48 +3299,57 @@ export default function App() {
             )}
 
             <div className="community-list">
-              {communityClubs
-                .filter((club) =>
-                  club.title.toLowerCase().includes(query.toLowerCase()) ||
-                  club.description.toLowerCase().includes(query.toLowerCase())
-                )
-                .map((club) => (
-                  <button
-                    className="community-card"
-                    key={club.id}
-                    onClick={() => openClub(club.id)}
-                  >
-                    <span className={`community-symbol ${club.icon}`}>
-                      <ClubIcon id={club.icon} size={20} />
+              {visibleClubs.map((club) => (
+                <div
+                  className="community-card"
+                  key={club.id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => openClub(club.id)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') openClub(club.id);
+                  }}
+                >
+                  <span className={`community-thumb ${club.icon}`}>
+                    <EventArt category={club.category || ''} />
+                    <span className="community-thumb-icon">
+                      <ClubIcon id={club.icon} size={22} />
                     </span>
+                  </span>
 
-                    <span className="community-copy">
-                      <b>{club.title}</b>
+                  <span className="community-copy">
+                    <b>{club.title}</b>
 
-                      <small>
-                        {Number(clubCounts[club.id] || 0)} участников
-                        {' · '}
-                        {
-                          upcomingEvents.filter(
-                            (event) => eventInClub(event, club)
-                          ).length
-                        } событий
-                        {clubJoined.includes(club.id)
-                          ? ' · ты в клубе'
-                          : ''}
-                      </small>
+                    <small>
+                      {Number(clubCounts[club.id] || 0)} участников
+                      {' · '}
+                      {
+                        upcomingEvents.filter(
+                          (event) => eventInClub(event, club)
+                        ).length
+                      } событий
+                    </small>
 
-                      <span>{club.description}</span>
+                    <span className="community-actions">
+                      <button
+                        className={`join-pill${
+                          clubJoined.includes(club.id) ? ' on' : ''
+                        }`}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void toggleClub(club.id);
+                        }}
+                      >
+                        {clubJoined.includes(club.id) ? 'Ты в клубе' : 'Вступить'}
+                      </button>
                     </span>
+                  </span>
 
-                    <ChevronRight size={18} />
-                  </button>
-                ))}
+                  <ChevronRight size={18} />
+                </div>
+              ))}
 
-              {communityClubs.filter((club) =>
-                club.title.toLowerCase().includes(query.toLowerCase()) ||
-                club.description.toLowerCase().includes(query.toLowerCase())
-              ).length === 0 && (
+              {visibleClubs.length === 0 && (
                 <p className="muted">
                   Сообщества не найдены.
                 </p>
@@ -3015,6 +3425,10 @@ export default function App() {
                     {profile.name}, {profile.age}
                   </h1>
 
+                  {profile.username && (
+                    <div className="ig-username">@{profile.username}</div>
+                  )}
+
                   {profile.city && (
                     <div className="ig-city">
                       <MapPin size={13} />
@@ -3056,18 +3470,56 @@ export default function App() {
                   </button>
                 </div>
 
-                <div className="ig-tab">
-                  <LayoutGrid size={20} />
+                <div className="ig-tabs" role="tablist">
+                  <button
+                    role="tab"
+                    aria-selected={profileTab === 'posts'}
+                    className={profileTab === 'posts' ? 'on' : ''}
+                    onClick={() => setProfileTab('posts')}
+                  >
+                    <LayoutGrid size={16} />
+                    Публикации
+                  </button>
+
+                  <button
+                    role="tab"
+                    aria-selected={profileTab === 'events'}
+                    className={profileTab === 'events' ? 'on' : ''}
+                    onClick={() => setProfileTab('events')}
+                  >
+                    <CalendarDays size={16} />
+                    Мои события
+                  </button>
                 </div>
 
-                {photoPosts.length > 0 || photoBusy ? (
-                  <div className="ig-grid">
-                    {photoBusy && (
-                      <div className="ig-tile ig-tile-loading">
-                        …
+                {profileTab === 'events' ? (
+                  events.filter((event) => event.joined).length > 0 ? (
+                    <div className="event-list">
+                      {events
+                        .filter((event) => event.joined)
+                        .map((event) => (
+                          <EventRow
+                            key={event.id}
+                            event={event}
+                            onOpen={openEvent}
+                          />
+                        ))}
+                    </div>
+                  ) : (
+                    <div className="ig-empty">
+                      <div className="ig-empty-icon">
+                        <CalendarDays size={26} />
                       </div>
-                    )}
 
+                      <b>Пока нет событий</b>
+
+                      <span>События, в которых ты участвуешь, появятся здесь</span>
+                    </div>
+                  )
+                ) : (
+                  <>
+                {photoPosts.length > 0 ? (
+                  <div className="ig-grid">
                     {photoPosts.map((post) => (
                       <button
                         className="ig-tile"
@@ -3078,6 +3530,7 @@ export default function App() {
                           src={post.photoUrl}
                           alt={post.caption || 'Публикация'}
                           loading="lazy"
+                          decoding="async"
                         />
                       </button>
                     ))}
@@ -3101,6 +3554,8 @@ export default function App() {
                       Опубликовать фото
                     </button>
                   </div>
+                )}
+                  </>
                 )}
               </>
             ) : (
@@ -3299,7 +3754,271 @@ export default function App() {
         ))}
       </nav>
 
-      {detail && detail.type !== 'person' && (
+      {groupId && profile && (
+        <Suspense
+          fallback={
+            <div className="group-screen">
+              <div className="group-state">Загрузка…</div>
+            </div>
+          }
+        >
+          <GroupScreen
+            eventId={groupId}
+            fallbackTitle={
+              events.find((event) => event.id === groupId)?.title ||
+              'Событие'
+            }
+            me={profile}
+            onClose={() => setGroupId(null)}
+            onAccessLost={(message) => {
+              setGroupId(null);
+              setNotice(message);
+              void syncEvents();
+            }}
+            onLeave={() => setConfirm({ kind: 'leave', id: groupId })}
+            onDelete={() => setConfirm({ kind: 'delete', id: groupId })}
+            onCountChange={(eventId, count) =>
+              setEvents((old) =>
+                old.map((event) =>
+                  event.id === eventId
+                    ? { ...event, participantCount: count, people: `${count} из ${event.capacity} участников` }
+                    : event
+                )
+              )
+            }
+          />
+        </Suspense>
+      )}
+
+      {confirm && (
+        <ConfirmDialog
+          title={
+            confirm.kind === 'leave'
+              ? 'Покинуть событие?'
+              : 'Удалить событие?'
+          }
+          text={
+            confirm.kind === 'leave'
+              ? `Ты выйдешь из «${confirmEvent?.title || 'события'}» и потеряешь доступ к чату группы.`
+              : `«${confirmEvent?.title || 'Событие'}» исчезнет у всех участников вместе с перепиской. Это действие нельзя отменить.`
+          }
+          confirmLabel={confirm.kind === 'leave' ? 'Покинуть' : 'Удалить'}
+          busy={confirmBusy}
+          onConfirm={() => void runConfirm()}
+          onCancel={() => setConfirm(null)}
+        />
+      )}
+
+      {detail?.type === 'event' && detailEvent && (
+        <div className="fs-screen event-page">
+          <div className="ep-cover">
+            <EventArt category={detailEvent.category} />
+            <div className="ep-shade" />
+
+            <div className="ep-bar">
+              <button
+                className="ep-btn"
+                onClick={() => {
+                  setEventMenu(false);
+                  setDetail(null);
+                }}
+                aria-label="Назад"
+              >
+                <ChevronLeft size={22} />
+              </button>
+
+              <span className="ep-bar-right">
+                <button
+                  className="ep-btn"
+                  onClick={() => void shareEvent(detailEvent)}
+                  aria-label="Поделиться"
+                >
+                  <Share2 size={18} />
+                </button>
+
+                <button
+                  className="ep-btn"
+                  onClick={() => setEventMenu((open) => !open)}
+                  aria-label="Ещё"
+                >
+                  <Ellipsis size={20} />
+                </button>
+              </span>
+            </div>
+
+            {eventMenu && (
+              <div className="ep-menu">
+                <button
+                  onClick={() => {
+                    setEventMenu(false);
+                    void shareEvent(detailEvent);
+                  }}
+                >
+                  <Share2 size={15} />
+                  Поделиться
+                </button>
+
+                {detailEvent.joined &&
+                  Boolean(profile?.uid) &&
+                  detailEvent.createdBy !== profile?.uid && (
+                    <button
+                      className="danger"
+                      onClick={() => {
+                        setEventMenu(false);
+                        setConfirm({ kind: 'leave', id: detailEvent.id });
+                      }}
+                    >
+                      <LogOut size={15} />
+                      Покинуть событие
+                    </button>
+                  )}
+
+                {Boolean(profile?.uid) &&
+                  detailEvent.createdBy === profile?.uid && (
+                    <button
+                      className="danger"
+                      onClick={() => {
+                        setEventMenu(false);
+                        setConfirm({ kind: 'delete', id: detailEvent.id });
+                      }}
+                    >
+                      <Trash2 size={15} />
+                      Удалить событие
+                    </button>
+                  )}
+              </div>
+            )}
+
+            <DateBadge date={detailEvent.date} />
+          </div>
+
+          <div className="ep-body">
+            <div className="eyebrow">{detailEvent.category}</div>
+
+            <h1>{detailEvent.title}</h1>
+
+            <div className="ep-facts">
+              <span>
+                <MapPin size={16} />
+                {detailEvent.place}
+              </span>
+
+              <span>
+                <Clock3 size={16} />
+                {displayDate(detailEvent.date)} · {detailEvent.time}
+              </span>
+            </div>
+
+            <div className="ep-people">
+              <AvatarStack count={detailEvent.participantCount} />
+              <span>{detailEvent.people}</span>
+            </div>
+
+            <p className="ep-desc">{detailEvent.description}</p>
+
+            {!detailEvent.joined && (
+              <button
+                className="ep-cta"
+                onClick={() => void joinEvent(detailEvent.id)}
+                disabled={
+                  detailEvent.participantCount >= detailEvent.capacity
+                }
+              >
+                {detailEvent.participantCount >= detailEvent.capacity
+                  ? 'Мест больше нет'
+                  : 'Присоединиться'}
+              </button>
+            )}
+
+            {detailEvent.joined &&
+              !detailEvent.id.startsWith('demo-') && (
+                <button
+                  className="ep-cta"
+                  onClick={() => {
+                    if (joinBusy.current.has(detailEvent.id)) {
+                      setNotice('Подожди секунду — присоединяемся…');
+                      return;
+                    }
+
+                    setGroupId(detailEvent.id);
+                    setDetail(null);
+                  }}
+                >
+                  <MessageCircle size={18} />
+                  Открыть группу
+                </button>
+              )}
+
+            <div className="ep-tabs" role="tablist">
+              <button
+                role="tab"
+                aria-selected={eventTab === 'about'}
+                className={eventTab === 'about' ? 'on' : ''}
+                onClick={() => setEventTab('about')}
+              >
+                О событии
+              </button>
+
+              <button
+                role="tab"
+                aria-selected={eventTab === 'members'}
+                className={eventTab === 'members' ? 'on' : ''}
+                onClick={() => setEventTab('members')}
+              >
+                Участники
+              </button>
+            </div>
+
+            {eventTab === 'about' ? (
+              <div className="ep-panel">
+                <div className="ep-row">
+                  <CalendarDays size={16} />
+                  <span>
+                    {displayDate(detailEvent.date)}, {detailEvent.time}
+                  </span>
+                </div>
+
+                <div className="ep-row">
+                  <MapPin size={16} />
+                  <span>{detailEvent.place}</span>
+                </div>
+
+                {detailEvent.city && (
+                  <div className="ep-row">
+                    <Compass size={16} />
+                    <span>{detailEvent.city}</span>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="ep-panel">
+                <div className="fill-bar">
+                  <i
+                    style={{
+                      width: `${Math.min(
+                        100,
+                        Math.round(
+                          (detailEvent.participantCount /
+                            Math.max(1, detailEvent.capacity)) *
+                            100
+                        )
+                      )}%`,
+                    }}
+                  />
+                </div>
+
+                <p className="muted">
+                  {detailEvent.joined
+                    ? 'Полный список участников — в группе события.'
+                    : 'Список участников откроется после вступления в событие.'}
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {detail?.type === 'club' && (
         <div
           className="detail-backdrop"
           onClick={() => setDetail(null)}
@@ -3318,122 +4037,6 @@ export default function App() {
               <X size={20} />
             </button>
 
-
-            {detail.type === 'event' && detailEvent && (
-              <>
-                <div className={`detail-event-art event-${detailEvent.color}`}>
-                  <EventCover category={detailEvent.category} size={30} />
-                  <div className="cover-shade" />
-                </div>
-
-                <div className="detail-content">
-                  <div className="eyebrow">
-                    {detailEvent.category}
-                  </div>
-
-                  <h1>{detailEvent.title}</h1>
-
-                  <div className="detail-facts">
-                    <span>
-                      <CalendarDays size={16} />
-                      {displayDate(detailEvent.date)}
-                    </span>
-
-                    <span>
-                      <Clock3 size={16} />
-                      {detailEvent.time}
-                    </span>
-
-                    <span>
-                      <MapPin size={16} />
-                      {detailEvent.place}
-                    </span>
-                  </div>
-
-                  <p>{detailEvent.description}</p>
-
-                  <div className="event-capacity">
-                    {detailEvent.people}
-                  </div>
-
-                  <button
-                    className="primary full"
-                    onClick={() => void joinEvent(detailEvent.id)}
-                    disabled={
-                      detailEvent.joined ||
-                      detailEvent.participantCount >= detailEvent.capacity
-                    }
-                  >
-                    {detailEvent.joined
-                      ? 'Ты участвуешь'
-                      : detailEvent.participantCount >= detailEvent.capacity
-                        ? 'Мест больше нет'
-                        : 'Присоединиться'}
-
-                    <Check size={17} />
-                  </button>
-
-                  {detailEvent.joined && (
-                    <section className="event-chat">
-                      <div className="event-chat-heading">
-                        <div>
-                          <span className="eyebrow">ОБЩЕНИЕ УЧАСТНИКОВ</span>
-                          <h2><MessageCircle size={18} /> Чат события</h2>
-                        </div>
-                        <span className="chat-count">{eventMessages.length}</span>
-                      </div>
-                      <div className="event-chat-messages" aria-live="polite">
-                        {eventChatLoading && eventMessages.length === 0 && (
-                          <p className="chat-empty">Загружаем сообщения…</p>
-                        )}
-                        {!eventChatLoading && eventMessages.length === 0 && (
-                          <p className="chat-empty">Пока тихо. Напиши первое сообщение участникам.</p>
-                        )}
-                        {eventMessages.map((message) => (
-                          <article
-                            className={`event-chat-message${message.uid === profile?.uid ? ' own' : ''}`}
-                            key={message.id}
-                          >
-                            <strong>{message.uid === profile?.uid ? 'Ты' : message.name}</strong>
-                            <p>{message.text}</p>
-                            {message.createdAt && (
-                              <time>{new Date(message.createdAt).toLocaleTimeString('ru-RU', {
-                                hour: '2-digit',
-                                minute: '2-digit',
-                              })}</time>
-                            )}
-                          </article>
-                        ))}
-                      </div>
-                      {eventChatError && <p className="chat-error">{eventChatError}</p>}
-                      <form
-                        className="event-chat-compose"
-                        onSubmit={(event) => {
-                          event.preventDefault();
-                          void sendEventChatMessage();
-                        }}
-                      >
-                        <input
-                          value={eventChatDraft}
-                          onChange={(event) => setEventChatDraft(event.target.value)}
-                          placeholder="Сообщение участникам…"
-                          maxLength={500}
-                          aria-label="Сообщение в чате события"
-                        />
-                        <button
-                          type="submit"
-                          className="chat-send"
-                          disabled={!eventChatDraft.trim() || eventChatSending}
-                          aria-label="Отправить сообщение"
-                        >
-                          <Send size={17} />
-                        </button>
-                      </form>
-                    </section>
-                  )}
-                </div>
-              </>
-            )}
 
             {detail.type === 'club' && detailClub && (
               <div className="detail-content club-detail">
