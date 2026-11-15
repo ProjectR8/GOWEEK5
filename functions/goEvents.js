@@ -51,6 +51,43 @@ function createEventHandlers({
   const toMillis = (value) =>
     value && typeof value.toMillis === "function" ? value.toMillis() : null;
 
+  // Точка события на карте. Необязательна; старые события без неё просто не попадают на карту.
+  const pointOf = (event) =>
+    typeof event.lat === "number" &&
+    typeof event.lng === "number" &&
+    Number.isFinite(event.lat) &&
+    Number.isFinite(event.lng)
+      ? { lat: event.lat, lng: event.lng }
+      : { lat: null, lng: null };
+
+  function parsePoint(data) {
+    const hasLat = data.lat !== undefined && data.lat !== null;
+    const hasLng = data.lng !== undefined && data.lng !== null;
+
+    if (!hasLat && !hasLng) return null;
+
+    const lat = Number(data.lat);
+    const lng = Number(data.lng);
+
+    if (
+      !hasLat ||
+      !hasLng ||
+      !Number.isFinite(lat) ||
+      !Number.isFinite(lng) ||
+      Math.abs(lat) > 90 ||
+      Math.abs(lng) > 180 ||
+      (lat === 0 && lng === 0)
+    ) {
+      throw new HttpsError("invalid-argument", "Некорректная точка на карте");
+    }
+
+    // 5 знаков ≈ 1 метр: точнее для встречи в парке не нужно.
+    return {
+      lat: Math.round(lat * 1e5) / 1e5,
+      lng: Math.round(lng * 1e5) / 1e5,
+    };
+  }
+
   // Участники из денормализованного поля; у старых событий — из подколлекции.
   async function readParticipantUids(tx, eventRef, data) {
     if (Array.isArray(data.participantUids)) {
@@ -99,6 +136,7 @@ function createEventHandlers({
         createdBy: event.createdBy || "",
         participantCount: Number(event.participantCount || 0),
         capacity: Number(event.capacity || 30),
+        ...pointOf(event),
         joined,
         status: event.status || "published",
       };
@@ -118,6 +156,7 @@ function createEventHandlers({
       createdBy: event.createdBy || "",
       participantCount: Number(event.participantCount || 0),
       capacity: Number(event.capacity || 30),
+      ...pointOf(event),
       status: event.status || "published",
     };
   }
@@ -257,6 +296,8 @@ function createEventHandlers({
       throw new HttpsError("invalid-argument", "Заполни все поля события");
     }
 
+    const point = parsePoint(data);
+
     const creator = await db.collection("profiles").doc(uid).get();
 
     const city = creator.exists
@@ -276,6 +317,7 @@ function createEventHandlers({
       place,
       city,
       capacity,
+      ...(point || {}),
       createdBy: uid,
       participantCount: 1,
       participantUids: [uid],
