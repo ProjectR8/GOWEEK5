@@ -674,7 +674,7 @@ function Splash({
           G<i />
         </span>
         <span className="splash-name">GO</span>
-        <span className="splash-tag">Город. Люди. События.</span>
+        <span className="splash-tag">GO. MEET. CONNECT.</span>
       </div>
 
       {error ? (
