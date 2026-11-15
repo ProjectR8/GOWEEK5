@@ -4,6 +4,7 @@ const admin = require("firebase-admin");
 const { getFirestore, FieldValue } = require("firebase-admin/firestore");
 const crypto = require("crypto");
 const { createEventHandlers } = require("./goEvents");
+const { createChatHandlers } = require("./goChat");
 
 admin.initializeApp();
 
@@ -115,6 +116,16 @@ function targetUidOf(request) {
 
 // Обработчики событий и групп (join/leave/delete, участники, чат).
 const eventHandlers = createEventHandlers({
+  db,
+  FieldValue,
+  HttpsError,
+  requireUser,
+  cleanString,
+  ageGroup,
+});
+
+// Общий чат (отдельный для подростков и взрослых).
+const chatHandlers = createChatHandlers({
   db,
   FieldValue,
   HttpsError,
@@ -1241,6 +1252,77 @@ exports.goSendEventMessage = onCall(
   { ...OPTS, maxInstances: 30 },
   safe(eventHandlers.goSendEventMessage)
 );
+
+
+// ---------- Общий чат ----------
+exports.goGetGlobalChat = onCall(OPTS, safe(chatHandlers.goGetGlobalChat));
+
+exports.goGetGlobalMessages = onCall(
+  { ...OPTS, maxInstances: 30 },
+  safe(chatHandlers.goGetGlobalMessages)
+);
+
+exports.goSendGlobalMessage = onCall(
+  { ...OPTS, maxInstances: 30 },
+  safe(chatHandlers.goSendGlobalMessage)
+);
+
+
+// ---------- Публичный профиль любого участника ----------
+// Нужен, чтобы открывать анкету из чатов и списков, даже если человека
+// нет среди первых 150 анкет, загруженных в приложение.
+exports.goGetUserProfile = onCall(OPTS, safe(async (request) => {
+  const uid = requireUser(request);
+  const targetUid = targetUidOf(request);
+
+  const sorted = [uid, targetUid].sort();
+
+  const [meSnap, targetSnap, tgSnap, matchSnap] = await Promise.all([
+    db.collection("profiles").doc(uid).get(),
+    db.collection("profiles").doc(targetUid).get(),
+    db.collection("tgData").doc(targetUid).get(),
+    db.collection("matches").doc(`${sorted[0]}_${sorted[1]}`).get(),
+  ]);
+
+  if (!meSnap.exists) {
+    throw new HttpsError(
+      "failed-precondition",
+      "Сначала заполни свою анкету"
+    );
+  }
+
+  if (!targetSnap.exists || targetSnap.data().isVisible !== true) {
+    throw new HttpsError("not-found", "Анкета недоступна");
+  }
+
+  if (ageGroup(targetSnap.data().age) !== ageGroup(meSnap.data().age)) {
+    throw new HttpsError("permission-denied", "Анкета недоступна");
+  }
+
+  const data = targetSnap.data();
+  const matched = matchSnap.exists || targetUid === uid;
+
+  const currentUsername =
+    (tgSnap.exists && tgSnap.data().username) || data.tgUsername || "";
+
+  const postsSnap = await db.collection("profiles")
+    .doc(targetUid)
+    .collection("posts")
+    .orderBy("createdAt", "desc")
+    .limit(30)
+    .get();
+
+  return {
+    profile: pub(targetUid, { ...data, tgUsername: currentUsername }, matched),
+    matched,
+    posts: postsSnap.docs.map((doc) => ({
+      id: doc.id,
+      photoUrl: doc.data().photoUrl || "",
+      caption: doc.data().caption || "",
+      createdAt: doc.data().createdAt?.toMillis?.() ?? null,
+    })),
+  };
+}));
 
 
 // ---------- Клубы и сообщества ----------
