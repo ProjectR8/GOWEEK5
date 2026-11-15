@@ -15,8 +15,12 @@ import {
   goGetEventGroup,
   goGetEventMembers,
   goGetEventMessages,
+  goGetGlobalChat,
+  goGetGlobalMessages,
   goSendEventMessage,
+  goSendGlobalMessage,
   type ApiEventGroup,
+  type ApiGlobalChat,
   type ApiGroupMember,
   type ApiGroupMessage,
   type ApiProfile,
@@ -38,7 +42,33 @@ type Props = {
   onLeave: () => void;
   onDelete: () => void;
   onCountChange: (eventId: string, count: number) => void;
+  // Открыть анкету участника (из аватара, имени или списка участников).
+  onOpenProfile: (uid: string) => void;
+  // Режим общего чата: без вкладки участников, событий и выхода.
+  global?: boolean;
 };
+
+// Общий чат приводим к тому же виду, что и группа события.
+const globalToGroup = (chat: ApiGlobalChat): ApiEventGroup => ({
+  event: {
+    id: 'global',
+    title: 'Общий чат',
+    description: '',
+    category: '',
+    date: '',
+    time: '',
+    place: '',
+    createdBy: '',
+    participantCount: 0,
+    capacity: 0,
+    status: 'published',
+  },
+  role: 'member',
+  members: [],
+  messages: chat.messages,
+  hasMore: chat.hasMore,
+  latestSeq: chat.latestSeq,
+});
 
 const MAX_LENGTH = 500;
 const COLORS = ['blue', 'pink', 'green'];
@@ -110,13 +140,15 @@ function Avatar({
   name,
   photoUrl,
   size = 34,
+  onOpen,
 }: {
   uid: string;
   name: string;
   photoUrl: string;
   size?: number;
+  onOpen?: () => void;
 }) {
-  return (
+  const face = (
     <span
       className={`g-avatar ${colorOf(uid)}`}
       style={{ width: size, height: size, fontSize: size * 0.42 }}
@@ -127,6 +159,19 @@ function Avatar({
         (name.trim().slice(0, 1) || '?').toUpperCase()
       )}
     </span>
+  );
+
+  if (!onOpen) return face;
+
+  return (
+    <button
+      type="button"
+      className="profile-link"
+      onClick={onOpen}
+      aria-label={`Открыть анкету: ${name}`}
+    >
+      {face}
+    </button>
   );
 }
 
@@ -148,6 +193,8 @@ export default function GroupScreen({
   onLeave,
   onDelete,
   onCountChange,
+  onOpenProfile,
+  global: isGlobal = false,
 }: Props) {
   const [group, setGroup] = useState<ApiEventGroup | null>(null);
   const [members, setMembers] = useState<ApiGroupMember[]>([]);
@@ -182,7 +229,7 @@ export default function GroupScreen({
   const loaded = group !== null;
 
   const refreshMembers = useCallback(async () => {
-    if (membersInFlight.current) return;
+    if (isGlobal || membersInFlight.current) return;
 
     membersInFlight.current = true;
 
@@ -202,7 +249,7 @@ export default function GroupScreen({
     } finally {
       membersInFlight.current = false;
     }
-  }, [eventId]);
+  }, [eventId, isGlobal]);
 
   // Первичная загрузка: участники и последняя страница истории.
   useEffect(() => {
@@ -211,7 +258,11 @@ export default function GroupScreen({
     setGroup(null);
     setLoadError('');
 
-    goGetEventGroup({ eventId, limit: 30 })
+    const request: Promise<ApiEventGroup> = isGlobal
+      ? goGetGlobalChat({ limit: 30 }).then(globalToGroup)
+      : goGetEventGroup({ eventId, limit: 30 });
+
+    request
       .then((result) => {
         if (cancelled) return;
 
@@ -258,7 +309,7 @@ export default function GroupScreen({
     return () => {
       cancelled = true;
     };
-  }, [eventId, attempt]);
+  }, [eventId, attempt, isGlobal]);
 
   // Подписка на новые сообщения: только пока экран открыт, только пока вкладка видна,
   // без параллельных запросов. Тихий чат опрашивается реже. Отписка — в cleanup.
@@ -291,10 +342,12 @@ export default function GroupScreen({
       let again = false;
 
       try {
-        const page = await goGetEventMessages({
-          eventId,
-          afterSeq: lastSeq.current,
-        });
+        const page = isGlobal
+          ? await goGetGlobalMessages({ afterSeq: lastSeq.current })
+          : await goGetEventMessages({
+              eventId,
+              afterSeq: lastSeq.current,
+            });
 
         if (stopped) return;
 
@@ -318,7 +371,7 @@ export default function GroupScreen({
         // Если страница была полной, забираем остальное сразу, без ожидания.
         again = page.hasMore;
 
-        if (page.participantCount !== memberCount.current) {
+        if (!isGlobal && page.participantCount !== memberCount.current) {
           memberCount.current = page.participantCount;
           void refreshMembers();
         }
@@ -366,7 +419,7 @@ export default function GroupScreen({
       document.removeEventListener('visibilitychange', onVisible);
       pollNow.current = () => undefined;
     };
-  }, [eventId, loaded, me.uid, refreshMembers]);
+  }, [eventId, loaded, me.uid, refreshMembers, isGlobal]);
 
   // Прокрутка: к низу при открытии и своих сообщениях, иначе сохраняем позицию.
   useLayoutEffect(() => {
@@ -415,11 +468,13 @@ export default function GroupScreen({
     setLoadingOlder(true);
 
     try {
-      const page = await goGetEventMessages({
-        eventId,
-        beforeSeq: first.seq,
-        limit: 30,
-      });
+      const page = isGlobal
+        ? await goGetGlobalMessages({ beforeSeq: first.seq, limit: 30 })
+        : await goGetEventMessages({
+            eventId,
+            beforeSeq: first.seq,
+            limit: 30,
+          });
 
       restoreScroll.current = listRef.current?.scrollHeight ?? null;
       setMessages((prev) => mergeMessages(prev, page.messages));
@@ -442,7 +497,9 @@ export default function GroupScreen({
     sending.current.add(clientId);
 
     try {
-      const result = await goSendEventMessage({ eventId, text, clientId });
+      const result = isGlobal
+        ? await goSendGlobalMessage({ text, clientId })
+        : await goSendEventMessage({ eventId, text, clientId });
 
       activityAt.current = Date.now();
       setMessages((prev) => mergeMessages(prev, [result.message]));
@@ -554,11 +611,14 @@ export default function GroupScreen({
         <div className="group-title">
           <b>{event?.title || fallbackTitle}</b>
           <small>
-            {total} участников{role === 'organizer' ? ' · ты организатор' : ''}
+            {isGlobal
+              ? 'Все участники GO твоего возраста'
+              : `${total} участников${role === 'organizer' ? ' · ты организатор' : ''}`}
           </small>
         </div>
       </header>
 
+      {!isGlobal && (
       <div className="group-tabs" role="tablist">
         <button
           role="tab"
@@ -579,6 +639,7 @@ export default function GroupScreen({
           Участники · {total}
         </button>
       </div>
+      )}
 
       {!group && !loadError && (
         <div className="group-state">
@@ -616,7 +677,9 @@ export default function GroupScreen({
                 <Mascot size={150} />
                 <b>Здесь пока тихо</b>
                 <span>
-                  Напиши первым: поздоровайся и договорись о деталях встречи.
+                  {isGlobal
+                    ? 'Напиши первым: поздоровайся со всеми и расскажи, чем занимаешься.'
+                    : 'Напиши первым: поздоровайся и договорись о деталях встречи.'}
                 </span>
               </div>
             ) : (
@@ -643,6 +706,7 @@ export default function GroupScreen({
                               uid={message.uid}
                               name={message.name}
                               photoUrl={message.photoUrl}
+                              onOpen={() => onOpenProfile(message.uid)}
                             />
                           )}
                         </span>
@@ -651,7 +715,13 @@ export default function GroupScreen({
                       <div className="chat-bubble-wrap">
                         {!mine && !grouped && (
                           <div className="chat-author">
-                            <span>{message.name}</span>
+                            <button
+                              type="button"
+                              className="profile-link name"
+                              onClick={() => onOpenProfile(message.uid)}
+                            >
+                              {message.name}
+                            </button>
                             {message.role === 'organizer' && <OrganizerBadge />}
                           </div>
                         )}
@@ -761,7 +831,24 @@ export default function GroupScreen({
 
             <div className="member-list">
               {members.map((member) => (
-                <div className="member-row" key={member.uid}>
+                <div
+                  className={`member-row${member.uid === me.uid ? '' : ' clickable'}`}
+                  key={member.uid}
+                  role={member.uid === me.uid ? undefined : 'button'}
+                  tabIndex={member.uid === me.uid ? undefined : 0}
+                  onClick={() => {
+                    if (member.uid !== me.uid) onOpenProfile(member.uid);
+                  }}
+                  onKeyDown={(keyEvent) => {
+                    if (
+                      member.uid !== me.uid &&
+                      (keyEvent.key === 'Enter' || keyEvent.key === ' ')
+                    ) {
+                      keyEvent.preventDefault();
+                      onOpenProfile(member.uid);
+                    }
+                  }}
+                >
                   <Avatar
                     uid={member.uid}
                     name={member.name}
