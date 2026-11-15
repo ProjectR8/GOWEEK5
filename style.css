@@ -2079,3 +2079,21 @@ body::before {
 .intro-cta { background: linear-gradient(135deg, #8b5cf6, var(--magenta)); }
 .splash-orb { background: radial-gradient(circle, rgba(217, 70, 239, .32), rgba(139, 92, 246, .3) 45%, transparent 70%); }
 body::before { background: radial-gradient(46% 30% at 100% 6%, rgba(139, 92, 246, .38), transparent 70%), radial-gradient(40% 26% at 0% 38%, rgba(217, 70, 239, .16), transparent 72%), radial-gradient(60% 34% at 70% 100%, rgba(45, 212, 191, .12), transparent 72%), linear-gradient(180deg, #0b0519, var(--bg) 55%); }
+
+/* ---------- общий чат и кликабельные анкеты ---------- */
+/* Анкета открывается поверх чата (чат: 80, уведомления: 90). */
+.person-screen { z-index: 85; }
+
+.profile-link { padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; display: inline-flex; border-radius: 50%; -webkit-tap-highlight-color: transparent; }
+.profile-link:active { opacity: .7; }
+.profile-link.name { border-radius: 6px; font-size: 11px; font-weight: 800; color: var(--muted); text-align: left; }
+
+.member-row.clickable { cursor: pointer; border-radius: 12px; }
+.member-row.clickable:active { background: rgba(196, 181, 253, .08); }
+
+.global-chat-card { width: 100%; display: flex; align-items: center; gap: 12px; margin-top: 18px; padding: 14px 16px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--glass); color: var(--lavender); text-align: left; transition: transform .18s var(--ease); }
+.global-chat-card:active { transform: scale(.98); }
+.global-chat-icon { flex: 0 0 auto; display: grid; place-items: center; width: 42px; height: 42px; border-radius: 14px; background: var(--accent-grad); color: #fff; }
+.global-chat-text { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.global-chat-text b { color: var(--text); font-size: 15px; }
+.global-chat-text small { color: var(--muted); font-size: 12px; }
