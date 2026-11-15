@@ -36,6 +36,10 @@ import {
 } from './goApi';
 
 const GroupScreen = lazy(() => import('./GroupScreen'));
+const MapScreen = lazy(() => import('./MapScreen'));
+const LocationPicker = lazy(() =>
+  import('./MapScreen').then((module) => ({ default: module.LocationPicker }))
+);
 
 type TelegramWebApp = {
   initData: string;
@@ -99,6 +103,8 @@ type EventItem = {
   city?: string;
   nearby?: boolean;
   createdBy?: string;
+  lat?: number | null;
+  lng?: number | null;
 };
 
 type Club = {
@@ -446,6 +452,8 @@ function toEvent(event: GoData['events'][number]): EventItem {
     createdBy: event.createdBy || '',
     color: eventColor(event.category || ''),
     description: event.description,
+    lat: event.lat ?? null,
+    lng: event.lng ?? null,
   };
 }
 
@@ -948,7 +956,12 @@ export default function App() {
     time: '',
     place: '',
     capacity: '12',
+    lat: null as number | null,
+    lng: null as number | null,
   });
+
+  const [mapOpen, setMapOpen] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
 
   const startX = useRef(0);
   const loadedRef = useRef(false);
@@ -1402,6 +1415,8 @@ export default function App() {
     const handleBack = () => {
       if (confirm) {
         if (!confirmBusy) setConfirm(null);
+      } else if (pickerOpen) {
+        setPickerOpen(false);
       } else if (detail?.type === 'person' && (groupId || globalChatOpen)) {
         // Анкета открыта поверх чата: сначала закрываем её.
         setDetail(null);
@@ -1409,6 +1424,11 @@ export default function App() {
         setGlobalChatOpen(false);
       } else if (groupId) {
         setGroupId(null);
+      } else if (detail && mapOpen) {
+        // Событие открыто с карты: возвращаемся на карту.
+        setDetail(null);
+      } else if (mapOpen) {
+        setMapOpen(false);
       } else if (notificationsOpen) {
         setNotificationsOpen(false);
       } else if (viewPost) {
@@ -1429,6 +1449,8 @@ export default function App() {
       confirm ||
       groupId ||
       globalChatOpen ||
+      mapOpen ||
+      pickerOpen ||
       detail ||
       notificationsOpen ||
       viewPost ||
@@ -1443,7 +1465,7 @@ export default function App() {
     tg.BackButton.onClick(handleBack);
 
     return () => tg.BackButton.offClick(handleBack);
-  }, [detail, notificationsOpen, viewPost, eventsOpen, createStarted, tab, groupId, globalChatOpen, confirm, confirmBusy]);
+  }, [detail, notificationsOpen, viewPost, eventsOpen, createStarted, tab, groupId, globalChatOpen, mapOpen, pickerOpen, confirm, confirmBusy]);
 
   const changeTab = (next: Tab) => {
     setTab(next);
@@ -1828,6 +1850,9 @@ export default function App() {
         time: eventForm.time,
         place: eventForm.place,
         capacity: Number(eventForm.capacity),
+        ...(eventForm.lat !== null && eventForm.lng !== null
+          ? { lat: eventForm.lat, lng: eventForm.lng }
+          : {}),
       });
 
       setEventForm({
@@ -1838,6 +1863,8 @@ export default function App() {
         time: '',
         place: '',
         capacity: '12',
+        lat: null,
+        lng: null,
       });
 
       setEventStep(0);
@@ -2554,22 +2581,34 @@ export default function App() {
               </div>
             )}
 
-            {authStatus === 'signed-in' && profile && (
-              <button
-                className="global-chat-card"
-                onClick={() => setGlobalChatOpen(true)}
-              >
-                <span className="global-chat-icon">
-                  <MessageCircle size={20} />
-                </span>
+            {authStatus === 'signed-in' && (
+              <div className="home-links">
+                <button
+                  className="home-link"
+                  onClick={() => setMapOpen(true)}
+                >
+                  <span className="home-link-icon">
+                    <MapPin size={20} />
+                  </span>
 
-                <span className="global-chat-text">
-                  <b>Общий чат GO</b>
-                  <small>Общайся со всеми участниками</small>
-                </span>
+                  <b>Карта событий</b>
+                  <small>Что проходит рядом</small>
+                </button>
 
-                <ChevronRight size={18} />
-              </button>
+                {profile && (
+                  <button
+                    className="home-link"
+                    onClick={() => setGlobalChatOpen(true)}
+                  >
+                    <span className="home-link-icon">
+                      <MessageCircle size={20} />
+                    </span>
+
+                    <b>Общий чат GO</b>
+                    <small>Все участники</small>
+                  </button>
+                )}
+              </div>
             )}
 
             <div className="quick-actions">
@@ -3165,8 +3204,20 @@ export default function App() {
                         />
                       </label>
 
+                      <button
+                        type="button"
+                        className="ghost map-pick-btn"
+                        onClick={() => setPickerOpen(true)}
+                      >
+                        <MapPin size={16} />
+                        {eventForm.lat !== null
+                          ? 'Место отмечено на карте · изменить'
+                          : 'Отметить на карте (необязательно)'}
+                      </button>
+
                       <span className="wizard-hint">
                         Не указывай домашний адрес. Город события берётся из твоей анкеты.
+                        Событие с точкой появится на карте событий.
                       </span>
                     </div>
                   )}
@@ -3806,6 +3857,47 @@ export default function App() {
                 )
               )
             }
+          />
+        </Suspense>
+      )}
+
+      {mapOpen && (
+        <Suspense
+          fallback={
+            <div className="fs-screen map-screen">
+              <div className="group-state">Загружаем карту…</div>
+            </div>
+          }
+        >
+          <MapScreen
+            events={upcomingEvents}
+            myCity={profile?.city}
+            onClose={() => setMapOpen(false)}
+            onOpenEvent={openEvent}
+          />
+        </Suspense>
+      )}
+
+      {pickerOpen && (
+        <Suspense
+          fallback={
+            <div className="fs-screen map-screen picker-screen">
+              <div className="group-state">Загружаем карту…</div>
+            </div>
+          }
+        >
+          <LocationPicker
+            initial={
+              eventForm.lat !== null && eventForm.lng !== null
+                ? { lat: eventForm.lat, lng: eventForm.lng }
+                : null
+            }
+            cityHint={profile?.city}
+            onClose={() => setPickerOpen(false)}
+            onConfirm={(lat, lng) => {
+              setEventForm((old) => ({ ...old, lat, lng }));
+              setPickerOpen(false);
+            }}
           />
         </Suspense>
       )}
